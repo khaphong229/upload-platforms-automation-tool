@@ -1,8 +1,8 @@
 from tkinter import *
 from tkinter import ttk
-from .styles import *
-from .components import AccountRow
-from core.account import AccountManager
+from batch_uploader.gui.styles import *
+from batch_uploader.gui.components import AccountRow
+from batch_uploader.core.account import AccountManager
 
 class Dashboard:
     def __init__(self, root):

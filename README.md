@@ -1,102 +1,107 @@
-# Auto Content Distribution Tool
+# TikTok Upload Manager
 
-Tool tự động hóa quy trình phân phối nội dung từ YouTube sang Blogger và TikTok.
+Công cụ quản lý và tự động đăng video lên TikTok với nhiều tài khoản, lập lịch đăng bài và giao diện thân thiện.
 
-## Tính năng
+## Tính năng chính
 
-- Tải video từ YouTube
-- Rút gọn link APK
-- Tạo bài viết blog tự động với Google Gemini AI (miễn phí)
-- Đăng video lên TikTok
-- Tự động thêm link blog vào caption và comment
+- 🚀 Đăng video lên nhiều tài khoản TikTok cùng lúc
+- 📅 Lập lịch đăng bài tự động
+- 👤 Quản lý nhiều tài khoản dễ dàng
+- 🎬 Xem trước video trước khi đăng
+- 🏷️ Quản lý hashtag và mô tả
+- 📊 Theo dõi trạng thái đăng tải
+- 🔒 Đăng nhập an toàn với lưu phiên làm việc
+- 📝 Tạo blog post tự động với Google Gemini AI
+- 🔗 Rút gọn link APK tự động
+- 📺 Tải video từ YouTube hoặc sử dụng file local
 
 ## Cài đặt
 
 1. Clone repository
-2. Cài đặt dependencies:
+2. Cài đặt các thư viện cần thiết:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Tạo file `.env` từ file `.env.example` và thêm các thông tin cần thiết:
+3. Tạo thư mục cấu hình:
 
 ```bash
-cp .env.example .env
-# Sau đó chỉnh sửa file .env với thông tin của bạn
+mkdir -p ~/.tiktok_profiles
 ```
 
-4. Lấy API Key của Google Gemini:
+4. Cài đặt Chrome và ChromeDriver (nếu chưa có)
+5. Cấu hình file `.env` với các API keys cần thiết
 
-   - Truy cập [Google AI Studio](https://aistudio.google.com/)
-   - Đăng ký hoặc đăng nhập vào tài khoản Google
-   - Trong trang chủ, tìm phần "API keys" và tạo API key mới
-   - Sao chép API key và thêm vào file .env
+## Hướng dẫn sử dụng
 
-5. Cấu hình OAuth cho Blogger:
-   - Tạo project trong [Google Cloud Console](https://console.cloud.google.com/)
-   - Enable Blogger API
-   - Tạo OAuth credentials (Web application)
-   - Lấy Client ID và Client Secret
-   - Sử dụng OAuth Playground để lấy refresh token:
-     - Truy cập [OAuth Playground](https://developers.google.com/oauthplayground/)
-     - Chọn Blogger API v3
-     - Authorize APIs
-     - Exchange authorization code for tokens
-     - Lưu refresh token vào file .env
-
-## Sử dụng
-
-1. Chạy tool:
+### Chương trình tích hợp (Khuyến nghị)
 
 ```bash
-python main.py
+python main_integrated.py
 ```
 
-2. Nhập thông tin cần thiết:
+Chương trình này bao gồm cả hai chức năng:
+- **Content Distribution**: Tải video từ YouTube, tạo blog, upload lên TikTok
+- **Batch Upload**: Upload video lên nhiều tài khoản TikTok cùng lúc
 
-   - Link video YouTube
-   - Tiêu đề video
-   - Các link APK
+### Khởi động từng chức năng riêng biệt
 
-3. Hoặc sử dụng command line arguments:
-
+#### 1. Content Distribution (Phân phối nội dung)
 ```bash
-python main.py --youtube-url "https://www.youtube.com/watch?v=example" --title "My App Title" --apk-links "https://example.com/app1.apk" "https://example.com/app2.apk"
+python gui_main.py
 ```
 
-4. Các tùy chọn khác:
-
+#### 2. Batch Upload (Upload hàng loạt)
 ```bash
-python main.py --help
+python run_batch_uploader.py
+# hoặc
+run_batch_uploader.bat
 ```
 
-## Quy trình hoạt động
+#### 3. Command Line Interface
+```bash
+python main.py --youtube-url "https://www.youtube.com/watch?v=example" --title "My App Title" --apk-links "https://example.com/app1.apk"
+```
 
-1. Tải video từ YouTube
-2. Rút gọn các link APK
-3. Tạo bài viết blog với nội dung được tạo bởi Google Gemini AI
-4. Đăng video lên TikTok với caption và comment chứa link blog
+### Quản lý tài khoản TikTok
+
+1. Mở tab "Batch Upload" hoặc chạy batch uploader
+2. Nhấn "Add Profile" để thêm tài khoản mới
+3. Nhập tên profile và nhấn "Add"
+4. Đăng nhập vào tài khoản TikTok trong cửa sổ trình duyệt
+5. Cấu hình video cho từng tài khoản
+6. Chọn tài khoản và nhấn "Upload Selected Profiles"
+
+### Cấu hình video cho batch upload
+
+1. Chọn profile trong danh sách
+2. Nhấn "Configure Video"
+3. Chọn file video, nhập caption và hashtags
+4. Nhấn "Save Configuration"
+5. Lặp lại cho các profile khác
+6. Chọn các profile đã cấu hình và nhấn "Upload Selected Profiles"
 
 ## Cấu trúc thư mục
 
 ```
-├── main.py                 # Entry point
-├── config/                 # Cấu hình
-│   ├── __init__.py
-│   └── config.py
-├── services/               # Các service chính
-│   ├── youtube/            # Service tải video YouTube
-│   ├── shortener/          # Service rút gọn link
-│   ├── ai/                 # Service tạo nội dung với Google Gemini AI
-│   ├── blogger/            # Service đăng bài lên Blogger
-│   └── tiktok/             # Service đăng video lên TikTok
-├── utils/                  # Tiện ích
-│   ├── __init__.py
-│   └── helpers.py
-├── .env                    # Environment variables
-├── .env.example            # Environment variables template
-└── requirements.txt        # Dependencies
+├── main.py                     # CLI entry point
+├── gui_main.py                 # Content Distribution GUI
+├── main_integrated.py          # Integrated GUI (All features)
+├── run_batch_uploader.py       # Batch Upload standalone
+├── config/                     # Cấu hình
+├── services/                   # Các service chính
+│   ├── youtube/               # Service tải video YouTube
+│   ├── shortener/             # Service rút gọn link
+│   ├── ai/                    # Service tạo nội dung với AI
+│   ├── blogger/               # Service đăng bài lên Blogger
+│   └── tiktok/                # Service đăng video lên TikTok
+├── batch_uploader/            # Hệ thống upload hàng loạt
+│   ├── gui/                   # GUI components
+│   ├── tiktok_uploader/       # Upload logic
+│   └── core/                  # Account management
+├── utils/                     # Tiện ích
+└── requirements.txt           # Dependencies
 ```
 
 ## Lưu ý

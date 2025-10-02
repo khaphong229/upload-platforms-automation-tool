@@ -3,31 +3,53 @@ import threading
 import json
 from tkinter import *
 from tkinter import ttk, messagebox, simpledialog
-from tiktok_uploader.uploader import TikTokUploader, BatchUploadGUI
+from .tiktok_uploader.uploader import TikTokUploader, BatchUploadGUI
 from concurrent.futures import ThreadPoolExecutor
 
 class Dashboard:
     def __init__(self, root):
         self.root = root
-        self.root.title("TikTok Upload Tool")
-        self.root.geometry("900x700")
+        # Don't set title if root is a Frame
+        if hasattr(root, 'title') and callable(getattr(root, 'title')):
+            try:
+                self.root.title("TikTok Upload Tool")
+            except:
+                pass  # Ignore if can't set title
         
-        # TikTok Upload Variables
-        self.tiktok_video_path = StringVar()
-        self.tiktok_caption = StringVar()
-        self.tiktok_hashtags = StringVar()
-
-        self.profile_configs = {}
-        self.selected_accounts = set()  # Track selected accounts
-        self.account_configs = {}  # Store video configs for each account
+        # Set geometry only if root is a Tk window
+        if hasattr(root, 'geometry') and callable(getattr(root, 'geometry')):
+            try:
+                self.root.geometry("900x700")
+            except:
+                pass  # Ignore if can't set geometry
         
+        self.setup_variables()
         self.setup_ui()
-        
+    
+    def setup_variables(self):
+        """Initialize variables"""
+        self.tiktok_video_path = StringVar()
+        self.tiktok_caption = StringVar() 
+        self.tiktok_hashtags = StringVar()
+        self.profile_configs = {}
+        self.selected_accounts = set()
+        self.account_configs = {}
+
     def setup_ui(self):
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(pady=10, expand=True, fill=BOTH)
-        
-        # TikTok Uploader Tab
+        """Setup the dashboard UI"""
+        # Create main container that works with both Tk and Frame
+        if isinstance(self.root, (Tk, Toplevel)):
+            main_frame = ttk.Frame(self.root)
+            main_frame.pack(expand=True, fill='both', padx=10, pady=10)
+        else:
+            # Root is already a Frame
+            main_frame = self.root
+
+        # Create notebook for tabs
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(expand=True, fill='both')
+
+        # TikTok Upload tab
         tiktok_frame = self.create_tiktok_tab(notebook)
         notebook.add(tiktok_frame, text="TikTok Uploader")
     

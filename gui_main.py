@@ -2,9 +2,10 @@
 import os
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, scrolledtext
+from tkinter import ttk, messagebox, filedialog, scrolledtext, simpledialog
 import threading
 import logging
+import time
 from pathlib import Path
 import queue
 from datetime import datetime
@@ -62,6 +63,13 @@ class ContentDistributionGUI:
         self.status_var = tk.StringVar(value="Ready")
         self.is_processing = False
         
+        # Initialize batch uploader
+        try:
+            self.batch_uploader = EnhancedTikTokUploader()
+        except Exception as e:
+            self.batch_uploader = None
+            print(f"Warning: Could not initialize batch uploader: {e}")
+        
         # Logging setup
         self.log_queue = queue.Queue()
         self.setup_logging()
@@ -88,7 +96,7 @@ class ContentDistributionGUI:
     
     def create_widgets(self):
         """Create all GUI widgets"""
-        # Main container
+        # Create main container
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
@@ -102,11 +110,24 @@ class ContentDistributionGUI:
                                font=('Arial', 16, 'bold'))
         title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
         
-        # Video Source section
-        source_frame = ttk.LabelFrame(main_frame, text="Video Source", padding="10")
-        source_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
-        source_frame.columnconfigure(1, weight=1)
+        # Create notebook for tabs
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
+        main_frame.rowconfigure(1, weight=1)
         
+        # Create tabs
+        self.create_content_distribution_tab()
+        # Removed TikTok Batch Uploader Tab
+
+    def create_content_distribution_tab(self):
+        """Create the content distribution tab"""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="Content Distribution")
+
+        # Video Source section
+        source_frame = ttk.LabelFrame(tab, text="Video Source", padding="10")
+        source_frame.pack(fill='x', pady=5)
+        source_frame.columnconfigure(1, weight=1)
         # Radio buttons for video source
         ttk.Radiobutton(source_frame, text="YouTube URL", variable=self.video_source, 
                        value="youtube", command=self.on_source_change).grid(row=0, column=0, sticky=tk.W, padx=(0, 20))
@@ -148,8 +169,8 @@ class ContentDistributionGUI:
         self.browse_btn.grid(row=0, column=1)
         
         # Title section
-        title_frame = ttk.LabelFrame(main_frame, text="Blog Post Settings", padding="10")
-        title_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        title_frame = ttk.LabelFrame(tab, text="Blog Post Settings", padding="10")
+        title_frame.pack(fill='x', pady=10)
         title_frame.columnconfigure(1, weight=1)
         
         ttk.Label(title_frame, text="Blog Title:", font=('Arial', 10, 'bold')).grid(
@@ -163,11 +184,15 @@ class ContentDistributionGUI:
             row=1, column=1, sticky=tk.W, padx=(10, 0))
         
         # APK Links section
-        ttk.Label(main_frame, text="APK Links:", font=('Arial', 10, 'bold')).grid(
-            row=4, column=0, sticky=(tk.W, tk.N), pady=5)
+        apk_section_frame = ttk.Frame(tab)
+        apk_section_frame.pack(fill='x', pady=10)
         
-        apk_frame = ttk.Frame(main_frame)
-        apk_frame.grid(row=4, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        ttk.Label(apk_section_frame, text="APK Links:", font=('Arial', 10, 'bold')).grid(
+            row=0, column=0, sticky=(tk.W, tk.N), pady=5)
+        
+        apk_frame = ttk.Frame(apk_section_frame)
+        apk_frame.grid(row=0, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        apk_section_frame.columnconfigure(1, weight=1)
         apk_frame.columnconfigure(0, weight=1)
         
         # APK links listbox with scrollbar
@@ -191,8 +216,8 @@ class ContentDistributionGUI:
         ttk.Button(apk_btn_frame, text="Clear All", command=self.clear_apk_links).grid(row=0, column=2)
         
         # Options section
-        options_frame = ttk.LabelFrame(main_frame, text="Processing Options", padding="10")
-        options_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        options_frame = ttk.LabelFrame(tab, text="Processing Options", padding="10")
+        options_frame.pack(fill='x', pady=10)
         
         ttk.Checkbutton(options_frame, text="Skip Download", variable=self.skip_download).grid(row=0, column=0, sticky=tk.W)
         ttk.Checkbutton(options_frame, text="Skip Blog Creation", variable=self.skip_blog).grid(row=0, column=1, sticky=tk.W, padx=(20, 0))
@@ -200,8 +225,8 @@ class ContentDistributionGUI:
         ttk.Checkbutton(options_frame, text="Save as Draft", variable=self.draft_mode).grid(row=1, column=1, sticky=tk.W, padx=(20, 0))
         
         # Progress section
-        progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding="10")
-        progress_frame.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        progress_frame = ttk.LabelFrame(tab, text="Progress", padding="10")
+        progress_frame.pack(fill='x', pady=10)
         progress_frame.columnconfigure(0, weight=1)
         
         self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100)
@@ -211,8 +236,8 @@ class ContentDistributionGUI:
         self.status_label.grid(row=1, column=0, sticky=tk.W)
         
         # Control buttons
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.grid(row=7, column=0, columnspan=3, pady=20)
+        btn_frame = ttk.Frame(tab)
+        btn_frame.pack(pady=20)
         
         self.start_btn = ttk.Button(btn_frame, text="Start Process", command=self.start_process, 
                                    style='Accent.TButton')
@@ -225,20 +250,20 @@ class ContentDistributionGUI:
         ttk.Button(btn_frame, text="Clear Log", command=self.clear_log).grid(row=0, column=3)
         
         # Log section
-        log_frame = ttk.LabelFrame(main_frame, text="Log", padding="10")
-        log_frame.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
+        log_frame = ttk.LabelFrame(tab, text="Log", padding="10")
+        log_frame.pack(fill='both', expand=True, pady=10)
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=10, state=tk.DISABLED)
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Configure main frame row weights
-        main_frame.rowconfigure(8, weight=1)
-        
         # Initialize UI state
         self.on_source_change()
     
+        # Load existing profiles
+        self.refresh_batch_profiles()
+
     def validate_configuration(self):
         """Validate configuration on startup"""
         try:
@@ -618,6 +643,273 @@ class ContentDistributionGUI:
     def open_settings(self):
         """Open settings dialog"""
         SettingsDialog(self.root)
+    
+    # Batch Uploader Methods
+    def refresh_batch_profiles(self):
+        """Refresh the list of batch upload profiles"""
+        if not self.batch_uploader:
+            return
+            
+        self.batch_profiles_listbox.delete(0, tk.END)
+        try:
+            profiles = self.batch_uploader.get_profiles()
+            for profile_name in profiles:
+                self.batch_profiles_listbox.insert(tk.END, profile_name)
+        except Exception as e:
+            self.log_message(f"Error loading batch profiles: {str(e)}", "ERROR")
+    
+    def add_batch_profile(self):
+        """Add a new batch upload profile"""
+        if not self.batch_uploader:
+            messagebox.showerror("Error", "Batch uploader not available")
+            return
+            
+        profile_name = simpledialog.askstring("New Profile", "Enter profile name:")
+        if profile_name and profile_name.strip():
+            try:
+                success = self.batch_uploader.add_profile(profile_name.strip())
+                if success:
+                    self.refresh_batch_profiles()
+                    self.log_message(f"Added profile: {profile_name}", "INFO")
+                    
+                    # Open browser for manual login
+                    if messagebox.askyesno("Login Required", 
+                                          f"Profile '{profile_name}' created. Open browser for login?"):
+                        success = self.batch_uploader.login(profile_name.strip())
+                        if success:
+                            self.log_message(f"Login successful for {profile_name}", "INFO")
+                        else:
+                            self.log_message(f"Login failed for {profile_name}", "ERROR")
+                else:
+                    messagebox.showwarning("Warning", f"Profile '{profile_name}' already exists")
+            except Exception as e:
+                self.log_message(f"Error adding profile: {str(e)}", "ERROR")
+                messagebox.showerror("Error", f"Failed to add profile: {str(e)}")
+    
+    def delete_batch_profile(self):
+        """Delete selected batch upload profile"""
+        if not self.batch_uploader:
+            messagebox.showerror("Error", "Batch uploader not available")
+            return
+            
+        selection = self.batch_profiles_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a profile to delete")
+            return
+        
+        profile_name = self.batch_profiles_listbox.get(selection[0])
+        if messagebox.askyesno("Confirm Delete", f"Delete profile '{profile_name}'?"):
+            try:
+                success = self.batch_uploader.remove_profile(profile_name)
+                if success:
+                    self.refresh_batch_profiles()
+                    self.log_message(f"Deleted profile: {profile_name}", "INFO")
+                else:
+                    messagebox.showerror("Error", "Failed to delete profile")
+            except Exception as e:
+                self.log_message(f"Error deleting profile: {str(e)}", "ERROR")
+                messagebox.showerror("Error", f"Failed to delete profile: {str(e)}")
+    
+    def configure_batch_video(self):
+        """Configure video for selected profile"""
+        selection = self.batch_profiles_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a profile to configure")
+            return
+        
+        profile_name = self.batch_profiles_listbox.get(selection[0])
+        
+        # Show config frame
+        self.batch_config_frame.pack(fill='x', pady=10)
+        
+        # Update selected profile label
+        self.batch_selected_profile_label.config(text=f"Configuring: {profile_name}")
+        
+        # Load existing config if available
+        self.batch_video_path_var.set("")
+        self.batch_caption_var.set("")
+        self.batch_hashtags_var.set("")
+    
+    def browse_batch_video(self):
+        """Browse for video file for batch upload"""
+        file_path = filedialog.askopenfilename(
+            title="Select Video File",
+            filetypes=[("Video Files", "*.mp4 *.mov *.avi *.mkv")]
+        )
+        if file_path:
+            self.batch_video_path_var.set(file_path)
+    
+    def save_batch_config(self):
+        """Save video configuration for selected profile"""
+        profile_text = self.batch_selected_profile_label.cget("text")
+        if not profile_text.startswith("Configuring:"):
+            messagebox.showwarning("Warning", "No profile selected for configuration")
+            return
+        
+        profile_name = profile_text.replace("Configuring: ", "")
+        video_path = self.batch_video_path_var.get()
+        caption = self.batch_caption_var.get()
+        hashtags = self.batch_hashtags_var.get()
+        
+        if not video_path or not os.path.exists(video_path):
+            messagebox.showerror("Error", "Please select a valid video file")
+            return
+        
+        # Store configuration
+        self.batch_configs[profile_name] = {
+            'video_path': video_path,
+            'caption': caption,
+            'hashtags': [tag.strip() for tag in hashtags.split(',') if tag.strip()]
+        }
+        
+        messagebox.showinfo("Success", f"Configuration saved for {profile_name}")
+        self.log_message(f"Video configuration saved for {profile_name}", "INFO")
+        
+        # Hide config frame
+        self.batch_config_frame.pack_forget()
+    
+    def start_batch_upload_process(self):
+        """Start batch upload process for selected profiles"""
+        if not self.batch_uploader:
+            messagebox.showerror("Error", "Batch uploader not available")
+            return
+            
+        selection = self.batch_profiles_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select profiles to upload")
+            return
+        
+        selected_profiles = [self.batch_profiles_listbox.get(idx) for idx in selection]
+        
+        # Check if all selected profiles have configurations
+        unconfigured = [profile for profile in selected_profiles 
+                       if profile not in self.batch_configs]
+        
+        if unconfigured:
+            messagebox.showerror("Error", 
+                               f"Please configure videos for these profiles first:\n{', '.join(unconfigured)}")
+            return
+        
+        # Start upload in separate thread
+        self.batch_upload_running = True
+        threading.Thread(target=self.run_batch_upload_process, 
+                        args=(selected_profiles,), daemon=True).start()
+        
+        self.log_message(f"Starting batch upload for {len(selected_profiles)} profiles", "INFO")
+    
+    def run_batch_upload_process(self, selected_profiles):
+        """Run the batch upload process"""
+        try:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            
+            # Update status
+            self.batch_status_text.config(state=tk.NORMAL)
+            self.batch_status_text.insert(tk.END, f"Starting batch upload for {len(selected_profiles)} profiles...\n")
+            self.batch_status_text.see(tk.END)
+            self.batch_status_text.config(state=tk.DISABLED)
+            
+            # Use ThreadPoolExecutor for parallel uploads
+            max_workers = min(len(selected_profiles), 3)  # Max 3 concurrent uploads
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit upload tasks
+                future_to_profile = {}
+                for profile in selected_profiles:
+                    if not self.batch_upload_running:
+                        break
+                    
+                    config = self.batch_configs[profile]
+                    future = executor.submit(
+                        self.upload_single_profile,
+                        profile,
+                        config['video_path'],
+                        config['caption'],
+                        config['hashtags']
+                    )
+                    future_to_profile[future] = profile
+                
+                # Process results as they complete
+                for future in as_completed(future_to_profile):
+                    if not self.batch_upload_running:
+                        break
+                    
+                    profile = future_to_profile[future]
+                    try:
+                        result = future.result()
+                        status = "SUCCESS" if result.success else "FAILED"
+                        message = f"Profile {profile}: {status} - {result.message}\n"
+                        
+                        self.batch_status_text.config(state=tk.NORMAL)
+                        self.batch_status_text.insert(tk.END, message)
+                        self.batch_status_text.see(tk.END)
+                        self.batch_status_text.config(state=tk.DISABLED)
+                        
+                        self.log_message(f"Upload {status.lower()} for {profile}: {result.message}", 
+                                       "INFO" if result.success else "ERROR")
+                        
+                    except Exception as e:
+                        error_msg = f"Profile {profile}: ERROR - {str(e)}\n"
+                        self.batch_status_text.config(state=tk.NORMAL)
+                        self.batch_status_text.insert(tk.END, error_msg)
+                        self.batch_status_text.see(tk.END)
+                        self.batch_status_text.config(state=tk.DISABLED)
+                        
+                        self.log_message(f"Upload error for {profile}: {str(e)}", "ERROR")
+            
+            if self.batch_upload_running:
+                completion_msg = "Batch upload process completed!\n"
+                self.batch_status_text.config(state=tk.NORMAL)
+                self.batch_status_text.insert(tk.END, completion_msg)
+                self.batch_status_text.see(tk.END)
+                self.batch_status_text.config(state=tk.DISABLED)
+                
+                self.log_message("Batch upload process completed", "INFO")
+                messagebox.showinfo("Complete", "Batch upload process has finished!")
+            
+        except Exception as e:
+            error_msg = f"Batch upload error: {str(e)}\n"
+            self.batch_status_text.config(state=tk.NORMAL)
+            self.batch_status_text.insert(tk.END, error_msg)
+            self.batch_status_text.see(tk.END)
+            self.batch_status_text.config(state=tk.DISABLED)
+            
+            self.log_message(f"Batch upload error: {str(e)}", "ERROR")
+            messagebox.showerror("Error", f"Batch upload failed: {str(e)}")
+        finally:
+            self.batch_upload_running = False
+    
+    def upload_single_profile(self, profile_name, video_path, caption, hashtags):
+        """Upload video for a single profile"""
+        try:
+            # Use the enhanced uploader for the upload
+            result = self.batch_uploader.upload_video(
+                video_path=video_path,
+                caption=caption,
+                hashtags=hashtags,
+                profile_name=profile_name
+            )
+            return result
+        except Exception as e:
+            # Return a failed result
+            from batch_uploader.tiktok_uploader.enhanced_uploader import UploadResult, UploadStatus
+            return UploadResult(
+                success=False,
+                message=str(e),
+                status=UploadStatus.FAILED,
+                profile=profile_name,
+                timestamp=time.time()
+            )
+    
+    def stop_batch_upload(self):
+        """Stop the batch upload process"""
+        self.batch_upload_running = False
+        self.log_message("Batch upload process stopped by user", "WARNING")
+        
+        status_msg = "Upload process stopped by user\n"
+        self.batch_status_text.config(state=tk.NORMAL)
+        self.batch_status_text.insert(tk.END, status_msg)
+        self.batch_status_text.see(tk.END)
+        self.batch_status_text.config(state=tk.DISABLED)
 
 
 class APKLinkDialog:

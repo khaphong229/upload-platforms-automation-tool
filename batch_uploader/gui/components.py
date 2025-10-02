@@ -1,5 +1,5 @@
 from tkinter import Frame, Label, Checkbutton
-from .styles import *
+from batch_uploader.gui.styles import *
 
 class AccountRow(Frame):
     def __init__(self, parent, data, row_idx, **kwargs):
