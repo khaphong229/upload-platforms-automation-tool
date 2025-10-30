@@ -124,9 +124,31 @@ class ContentDistributionGUI:
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="Content Distribution")
 
-        # Video Source section
-        source_frame = ttk.LabelFrame(tab, text="Video Source", padding="10")
-        source_frame.pack(fill='x', pady=5)
+        # Create scrollable frame
+        canvas = tk.Canvas(tab)
+        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Pack scrollbar and canvas
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Bind mouse wheel to canvas
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # Video Source section (now in scrollable_frame instead of tab)
+        source_frame = ttk.LabelFrame(scrollable_frame, text="Video Source", padding="10")
+        source_frame.pack(fill='x', pady=5, padx=10)
         source_frame.columnconfigure(1, weight=1)
         # Radio buttons for video source
         ttk.Radiobutton(source_frame, text="YouTube URL", variable=self.video_source, 
@@ -168,9 +190,9 @@ class ContentDistributionGUI:
         self.browse_btn = ttk.Button(file_input_frame, text="Browse", command=self.browse_video_file, state=tk.DISABLED)
         self.browse_btn.grid(row=0, column=1)
         
-        # Title section
-        title_frame = ttk.LabelFrame(tab, text="Blog Post Settings", padding="10")
-        title_frame.pack(fill='x', pady=10)
+        # Title section (now in scrollable_frame instead of tab)
+        title_frame = ttk.LabelFrame(scrollable_frame, text="Blog Post Settings", padding="10")
+        title_frame.pack(fill='x', pady=10, padx=10)
         title_frame.columnconfigure(1, weight=1)
         
         ttk.Label(title_frame, text="Blog Title:", font=('Arial', 10, 'bold')).grid(
@@ -183,10 +205,10 @@ class ContentDistributionGUI:
                  font=('Arial', 8), foreground='gray').grid(
             row=1, column=1, sticky=tk.W, padx=(10, 0))
         
-        # APK Links section
-        apk_section_frame = ttk.Frame(tab)
-        apk_section_frame.pack(fill='x', pady=10)
-        
+        # APK Links section (now in scrollable_frame instead of tab)
+        apk_section_frame = ttk.Frame(scrollable_frame)
+        apk_section_frame.pack(fill='x', pady=10, padx=10)
+
         ttk.Label(apk_section_frame, text="APK Links:", font=('Arial', 10, 'bold')).grid(
             row=0, column=0, sticky=(tk.W, tk.N), pady=5)
         
@@ -215,18 +237,18 @@ class ContentDistributionGUI:
         ttk.Button(apk_btn_frame, text="Remove Selected", command=self.remove_apk_link).grid(row=0, column=1, padx=(0, 5))
         ttk.Button(apk_btn_frame, text="Clear All", command=self.clear_apk_links).grid(row=0, column=2)
         
-        # Options section
-        options_frame = ttk.LabelFrame(tab, text="Processing Options", padding="10")
-        options_frame.pack(fill='x', pady=10)
-        
+        # Options section (now in scrollable_frame instead of tab)
+        options_frame = ttk.LabelFrame(scrollable_frame, text="Processing Options", padding="10")
+        options_frame.pack(fill='x', pady=10, padx=10)
+
         ttk.Checkbutton(options_frame, text="Skip Download", variable=self.skip_download).grid(row=0, column=0, sticky=tk.W)
         ttk.Checkbutton(options_frame, text="Skip Blog Creation", variable=self.skip_blog).grid(row=0, column=1, sticky=tk.W, padx=(20, 0))
         ttk.Checkbutton(options_frame, text="Skip TikTok Upload", variable=self.skip_tiktok).grid(row=1, column=0, sticky=tk.W)
         ttk.Checkbutton(options_frame, text="Save as Draft", variable=self.draft_mode).grid(row=1, column=1, sticky=tk.W, padx=(20, 0))
         
-        # Progress section
-        progress_frame = ttk.LabelFrame(tab, text="Progress", padding="10")
-        progress_frame.pack(fill='x', pady=10)
+        # Progress section (now in scrollable_frame instead of tab)
+        progress_frame = ttk.LabelFrame(scrollable_frame, text="Progress", padding="10")
+        progress_frame.pack(fill='x', pady=10, padx=10)
         progress_frame.columnconfigure(0, weight=1)
         
         self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100)
@@ -235,10 +257,10 @@ class ContentDistributionGUI:
         self.status_label = ttk.Label(progress_frame, textvariable=self.status_var)
         self.status_label.grid(row=1, column=0, sticky=tk.W)
         
-        # Control buttons
-        btn_frame = ttk.Frame(tab)
-        btn_frame.pack(pady=20)
-        
+        # Control buttons (now in scrollable_frame instead of tab)
+        btn_frame = ttk.Frame(scrollable_frame)
+        btn_frame.pack(pady=20, padx=10)
+
         self.start_btn = ttk.Button(btn_frame, text="Start Process", command=self.start_process, 
                                    style='Accent.TButton')
         self.start_btn.grid(row=0, column=0, padx=(0, 10))
@@ -249,9 +271,9 @@ class ContentDistributionGUI:
         ttk.Button(btn_frame, text="Settings", command=self.open_settings).grid(row=0, column=2, padx=(0, 10))
         ttk.Button(btn_frame, text="Clear Log", command=self.clear_log).grid(row=0, column=3)
         
-        # Log section
-        log_frame = ttk.LabelFrame(tab, text="Log", padding="10")
-        log_frame.pack(fill='both', expand=True, pady=10)
+        # Log section (now in scrollable_frame instead of tab)
+        log_frame = ttk.LabelFrame(scrollable_frame, text="Log", padding="10")
+        log_frame.pack(fill='both', expand=True, pady=10, padx=10)
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         
@@ -260,7 +282,7 @@ class ContentDistributionGUI:
         
         # Initialize UI state
         self.on_source_change()
-    
+
         # Load existing profiles
         self.refresh_batch_profiles()
 
