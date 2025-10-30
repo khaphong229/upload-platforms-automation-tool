@@ -1,0 +1,1 @@
+- always code ui in file @qt_main.py oke

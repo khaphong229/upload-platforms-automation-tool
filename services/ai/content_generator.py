@@ -32,7 +32,7 @@ class ContentGenerator:
             genai.configure(api_key=self.api_key)
             self.model = genai.GenerativeModel('gemini-2.0-flash')
     
-    def generate_blog_post(self, title, video_info, apk_links, max_tokens=None, prompt_id=None):
+    def generate_blog_post(self, title, video_info, apk_links, max_tokens=None, prompt_id=None, language="vietnamese"):
         """
         Generate a blog post about a video with APK links
 
@@ -42,11 +42,12 @@ class ContentGenerator:
             apk_links (dict): Dictionary of APK links (original -> shortened)
             max_tokens (int): Maximum number of tokens for the generated content
             prompt_id (str): ID of the prompt template to use (optional)
+            language (str): Language for the content ('vietnamese' or 'english')
 
         Returns:
             str: The generated blog post content
         """
-        logger.info(f"Generating blog post for: {title}")
+        logger.info(f"Generating blog post for: {title} (Language: {language})")
 
         # Get provider configuration
         provider_config = self.ai_config.get_provider_config()
@@ -58,7 +59,7 @@ class ContentGenerator:
             prompt_id = self.ai_config.get_selected_prompt('blog_post')
 
         # Create a prompt for the AI using prompt manager
-        prompt = self._create_blog_prompt(title, video_info, apk_links, prompt_id)
+        prompt = self._create_blog_prompt(title, video_info, apk_links, prompt_id, language)
         
         try:
             # Get temperature from config
@@ -84,7 +85,7 @@ class ContentGenerator:
             # Fallback to a simple template if AI generation fails
             return self._create_fallback_content(title, video_info, apk_links)
     
-    def _create_blog_prompt(self, title, video_info, apk_links, prompt_id):
+    def _create_blog_prompt(self, title, video_info, apk_links, prompt_id, language="vietnamese"):
         """Create a prompt for the AI to generate a blog post"""
 
         # Extract video information
@@ -94,6 +95,13 @@ class ContentGenerator:
         # Create a list of APK links
         apk_links_text = "\n".join([f"- {name}: {url}" for name, url in apk_links.items()])
 
+        # Language instruction
+        language_instruction = ""
+        if language == "vietnamese":
+            language_instruction = "IMPORTANT: Write the entire blog post in VIETNAMESE language (Tiếng Việt)."
+        else:
+            language_instruction = "IMPORTANT: Write the entire blog post in ENGLISH language."
+
         try:
             # Use prompt manager to format the prompt
             prompt = self.prompt_manager.format_prompt(
@@ -101,14 +109,17 @@ class ContentGenerator:
                 title=title,
                 video_title=video_title,
                 video_description=video_description,
-                apk_links_text=apk_links_text
+                apk_links_text=apk_links_text,
+                language_instruction=language_instruction
             )
-            logger.info(f"Using prompt template: {prompt_id}")
+            logger.info(f"Using prompt template: {prompt_id} (Language: {language})")
             return prompt
         except Exception as e:
             logger.warning(f"Error formatting prompt '{prompt_id}': {str(e)}. Using fallback.")
             # Fallback to default prompt
             prompt = f"""
+{language_instruction}
+
 Write a comprehensive blog post about the following video and app:
 
 TITLE: {title}
@@ -129,6 +140,8 @@ The blog post should:
 6. Be between 500-800 words
 
 Format the blog post in HTML with appropriate tags (h1, h2, p, ul, li, etc.)
+
+Remember: {language_instruction}
 """
             return prompt
     

@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QMainWindow, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QFileDialog, QTabWidget, QRadioButton, QGroupBox,
     QTextEdit, QListWidget, QListWidgetItem, QMessageBox, QCheckBox, QProgressBar,
-    QFormLayout, QDialog, QDialogButtonBox, QStyle, QComboBox
+    QFormLayout, QDialog, QDialogButtonBox, QStyle, QComboBox, QButtonGroup
 )
 from PyQt5.QtGui import QPalette, QColor
 
@@ -19,7 +19,7 @@ from config import validate_config
 from services.youtube import YouTubeDownloader
 from services.shortener import URLShortener
 from services.ai import ContentGenerator
-from services.blogger import BloggerPublisher
+from services.blogger import BloggerPublisher, WordPressPublisher
 from utils import sanitize_filename, clean_temp_dir
 from qt_ai_settings import AISettingsDialog
 
@@ -49,15 +49,120 @@ class APKLinkDialog(QDialog):
         return self.name_edit.text().strip(), self.url_edit.text().strip()
 
 
+class ContentPreviewDialog(QDialog):
+    """Dialog to preview and approve/regenerate AI-generated content before posting"""
+
+    def __init__(self, title: str, content: str, parent=None, language: str = "vietnamese"):
+        super().__init__(parent)
+        self.setWindowTitle("Preview Blog Content")
+        self.setModal(True)
+        self.resize(900, 700)
+        self.approved = False
+        self.regenerate = False
+
+        # Create layout
+        layout = QVBoxLayout()
+
+        # Language indicator
+        lang_flag = "🇻🇳 Vietnamese" if language == "vietnamese" else "🇺🇸 English"
+
+        # Title section
+        title_label = QLabel(f"<h2>📝 Preview: {title}</h2><p style='color: #8ecae6;'>Language: {lang_flag}</p>")
+        title_label.setWordWrap(True)
+        layout.addWidget(title_label)
+
+        # Info label
+        info_label = QLabel("Review the AI-generated content below. You can approve it to proceed with posting, or regenerate to create new content.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #8ecae6; padding: 10px; background-color: rgba(142, 202, 230, 0.1); border-radius: 4px;")
+        layout.addWidget(info_label)
+
+        # Tab widget for HTML and Rendered view
+        tabs = QTabWidget()
+
+        # HTML source tab
+        html_tab = QWidget()
+        html_layout = QVBoxLayout(html_tab)
+        self.content_edit = QTextEdit()
+        self.content_edit.setPlainText(content)
+        self.content_edit.setFont(__import__('PyQt5.QtGui', fromlist=['QFont']).QFont("Consolas", 10))
+        html_layout.addWidget(self.content_edit)
+        tabs.addTab(html_tab, "HTML Source")
+
+        # Rendered preview tab
+        preview_tab = QWidget()
+        preview_layout = QVBoxLayout(preview_tab)
+        self.preview_browser = QTextEdit()
+        self.preview_browser.setReadOnly(True)
+        self.preview_browser.setHtml(content)
+        preview_layout.addWidget(self.preview_browser)
+        tabs.addTab(preview_tab, "Preview")
+
+        layout.addWidget(tabs)
+
+        # Character count
+        char_count = len(content)
+        word_count = len(content.split())
+        stats_label = QLabel(f"📊 Stats: {char_count} characters, {word_count} words")
+        stats_label.setStyleSheet("color: #aaa; font-style: italic;")
+        layout.addWidget(stats_label)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+
+        self.regenerate_btn = QPushButton("🔄 Regenerate")
+        self.regenerate_btn.setStyleSheet("background-color: #ffd166; color: black; padding: 10px 20px; font-weight: bold;")
+        self.regenerate_btn.clicked.connect(self._on_regenerate)
+
+        self.approve_btn = QPushButton("✓ Approve & Post")
+        self.approve_btn.setStyleSheet("background-color: #80ed99; color: black; padding: 10px 20px; font-weight: bold;")
+        self.approve_btn.clicked.connect(self._on_approve)
+
+        self.cancel_btn = QPushButton("✗ Cancel")
+        self.cancel_btn.setStyleSheet("padding: 10px 20px;")
+        self.cancel_btn.clicked.connect(self.reject)
+
+        button_layout.addWidget(self.regenerate_btn)
+        button_layout.addStretch()
+        button_layout.addWidget(self.cancel_btn)
+        button_layout.addWidget(self.approve_btn)
+
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+    def _on_approve(self):
+        """User approved the content"""
+        self.approved = True
+        self.regenerate = False
+        self.accept()
+
+    def _on_regenerate(self):
+        """User wants to regenerate the content"""
+        self.approved = False
+        self.regenerate = True
+        self.accept()
+
+    def get_content(self) -> str:
+        """Get the (possibly edited) content"""
+        return self.content_edit.toPlainText()
+
+    def get_result(self) -> Tuple[bool, bool]:
+        """Returns (approved, regenerate)"""
+        return self.approved, self.regenerate
+
+
 class WorkerThread(QThread):
     log = pyqtSignal(str)
     progress = pyqtSignal(int, str)
     completed = pyqtSignal(bool, str)
     step_done = pyqtSignal(str)
+    content_generated = pyqtSignal(str, str)  # (title, content)
 
     def __init__(self, *, video_source: str, youtube_url: str, local_path: str,
                  title: str, apk_links: List[Tuple[str, str]],
-                 skip_download: bool, skip_blog: bool, draft_mode: bool):
+                 skip_download: bool, skip_blog: bool, draft_mode: bool,
+                 blog_platform: str = "blogger", wordpress_config: dict = None,
+                 language: str = "vietnamese"):
         super().__init__()
         self.video_source = video_source
         self.youtube_url = youtube_url
@@ -67,6 +172,12 @@ class WorkerThread(QThread):
         self.skip_download = skip_download
         self.skip_blog = skip_blog
         self.draft_mode = draft_mode
+        self.blog_platform = blog_platform
+        self.wordpress_config = wordpress_config or {}
+        self.language = language
+        self.approved_content = None
+        self.should_regenerate = False
+        self.user_approved = False
 
     def safe_log(self, level: str, message: str):
         self.log.emit(f"[{level}] {message}")
@@ -130,22 +241,85 @@ class WorkerThread(QThread):
                 shortened_links = {name: url for name, url in self.apk_links}
             self.step_done.emit("Links shortened")
 
-            # Step 3: Create blog post
-            self.safe_log("STEP", "Create blog post")
+            # Step 3: Generate and preview blog content
+            self.safe_log("STEP", "Generate blog content with AI")
             blog_post = None
             if not self.skip_blog:
                 step += 1
-                self.progress.emit(int(step/total_steps*100), "Creating blog post...")
+                self.progress.emit(int(step/total_steps*100), "Generating blog content...")
+
+                # Content generation loop (allows regeneration)
+                content_approved = False
+                blog_content = None
+
+                while not content_approved:
+                    try:
+                        # Generate content
+                        lang_name = "Vietnamese" if self.language == "vietnamese" else "English"
+                        self.safe_log("INFO", f"Generating blog content with AI ({lang_name})...")
+                        content_generator = ContentGenerator()
+                        blog_content = content_generator.generate_blog_post(
+                            self.title, video_info, shortened_links, language=self.language
+                        )
+
+                        # Emit signal to show preview dialog in main thread
+                        self.safe_log("INFO", "Content generated, waiting for user approval...")
+                        self.user_approved = False
+                        self.should_regenerate = False
+                        self.content_generated.emit(self.title, blog_content)
+
+                        # Wait for user decision
+                        while not self.user_approved and not self.should_regenerate:
+                            self.msleep(100)  # Sleep for 100ms
+                            if not self.isRunning():
+                                self.safe_log("WARNING", "Process interrupted")
+                                self.completed.emit(False, "Process interrupted by user")
+                                return
+
+                        if self.user_approved:
+                            content_approved = True
+                            if self.approved_content:
+                                blog_content = self.approved_content
+                            self.safe_log("INFO", "Content approved by user")
+                        elif self.should_regenerate:
+                            self.safe_log("INFO", "Regenerating content...")
+                            self.progress.emit(int(step/total_steps*100), "Regenerating content...")
+                            continue
+                    except Exception as e:
+                        self.safe_log("ERROR", f"Error generating blog content: {str(e)}")
+                        self.completed.emit(False, str(e))
+                        return
+
+                # Step 4: Post to blog platform
+                self.safe_log("STEP", f"Posting to {self.blog_platform.title()}")
+                self.progress.emit(int(step/total_steps*100), f"Posting to {self.blog_platform}...")
+
                 try:
-                    content_generator = ContentGenerator()
-                    blog_content = content_generator.generate_blog_post(self.title, video_info, shortened_links)
-                    blogger = BloggerPublisher()
-                    blog_post = blogger.create_post(
-                        title=self.title,
-                        content=blog_content,
-                        labels=["APK", "Download", "Mobile App"],
-                        is_draft=self.draft_mode
-                    )
+                    # Select platform
+                    if self.blog_platform == "wordpress":
+                        self.safe_log("INFO", "Posting to WordPress...")
+                        wordpress = WordPressPublisher(
+                            site_url=self.wordpress_config.get('url'),
+                            username=self.wordpress_config.get('username'),
+                            password=self.wordpress_config.get('password')
+                        )
+                        blog_post = wordpress.create_post(
+                            title=self.title,
+                            content=blog_content,
+                            status="draft" if self.draft_mode else "publish",
+                            categories=["APK", "Download"],
+                            tags=["Mobile App", "Android"]
+                        )
+                    else:  # blogger
+                        self.safe_log("INFO", "Posting to Blogger...")
+                        blogger = BloggerPublisher()
+                        blog_post = blogger.create_post(
+                            title=self.title,
+                            content=blog_content,
+                            labels=["APK", "Download", "Mobile App"],
+                            is_draft=self.draft_mode
+                        )
+
                     self.safe_log("INFO", f"Blog post created: {blog_post['url']}")
                 except Exception as e:
                     self.safe_log("ERROR", f"Error creating blog post: {str(e)}")
@@ -170,6 +344,12 @@ class MainWindow(QMainWindow):
         self.session_path = Path("last_session.json")
         self.shorteners = []  # list of dicts: {name, template, headers_text, keys}
         self.apk_links_data = []  # list of dicts: {name, original, short}
+
+        # Blog platform configuration
+        self.blog_platform = "blogger"  # "blogger" or "wordpress"
+        self.wordpress_url = ""
+        self.wordpress_username = ""
+        self.wordpress_password = ""
 
         self.youtube_url_edit = QLineEdit()
         self.title_edit = QLineEdit()
@@ -201,6 +381,10 @@ class MainWindow(QMainWindow):
         tabs.addTab(content_tab, "Content Distribution")
         shortener_tab = QWidget()
         tabs.addTab(shortener_tab, "Link Shorteners")
+
+        # Add Blog Platform Configuration tab
+        blog_platform_tab = QWidget()
+        tabs.addTab(blog_platform_tab, "Blog Platform")
 
         # Add AI Settings tab
         ai_settings_tab = QWidget()
@@ -236,9 +420,25 @@ class MainWindow(QMainWindow):
 
         # Title group
         title_group = QGroupBox("📝 Blog Post Settings")
-        t_layout = QHBoxLayout()
-        t_layout.addWidget(QLabel("Blog Title:"))
-        t_layout.addWidget(self.title_edit)
+        t_layout = QVBoxLayout()
+
+        # Title row
+        title_row = QHBoxLayout()
+        title_row.addWidget(QLabel("Blog Title:"))
+        title_row.addWidget(self.title_edit)
+        t_layout.addLayout(title_row)
+
+        # Language selection row
+        lang_row = QHBoxLayout()
+        lang_row.addWidget(QLabel("Content Language:"))
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("🇻🇳 Vietnamese", "vietnamese")
+        self.language_combo.addItem("🇺🇸 English", "english")
+        self.language_combo.setCurrentIndex(0)  # Default to Vietnamese
+        lang_row.addWidget(self.language_combo)
+        lang_row.addStretch(1)
+        t_layout.addLayout(lang_row)
+
         title_group.setLayout(t_layout)
 
         # APK links group
@@ -359,8 +559,195 @@ class MainWindow(QMainWindow):
         hist_group.setLayout(h_layout)
         s_outer.addWidget(hist_group)
 
+        # Build Blog Platform Configuration tab UI
+        self._build_blog_platform_tab(blog_platform_tab)
+
         # Build AI Settings tab UI
         self._build_ai_settings_tab(ai_settings_tab)
+
+    def _build_blog_platform_tab(self, parent):
+        """Build the Blog Platform Configuration tab"""
+        layout = QVBoxLayout(parent)
+
+        # Title
+        title_label = QLabel("<h2>📝 Blog Platform Configuration</h2>")
+        layout.addWidget(title_label)
+
+        # Platform selection group
+        platform_group = QGroupBox("Select Blog Platform")
+        platform_layout = QVBoxLayout()
+
+        self.platform_button_group = QButtonGroup()
+        self.blogger_radio = QRadioButton("Google Blogger")
+        self.wordpress_radio = QRadioButton("WordPress")
+
+        self.platform_button_group.addButton(self.blogger_radio)
+        self.platform_button_group.addButton(self.wordpress_radio)
+
+        self.blogger_radio.setChecked(True)
+        self.blogger_radio.toggled.connect(self._on_platform_changed)
+
+        platform_layout.addWidget(self.blogger_radio)
+        platform_layout.addWidget(self.wordpress_radio)
+        platform_group.setLayout(platform_layout)
+        layout.addWidget(platform_group)
+
+        # Blogger configuration
+        self.blogger_config_group = QGroupBox("Google Blogger Settings")
+        blogger_layout = QVBoxLayout()
+
+        blogger_info = QLabel(
+            "Blogger configuration is managed through the .env file.\n\n"
+            "Required environment variables:\n"
+            "• BLOGGER_BLOG_ID\n"
+            "• GOOGLE_CLIENT_ID\n"
+            "• GOOGLE_CLIENT_SECRET\n"
+            "• GOOGLE_REFRESH_TOKEN\n\n"
+            "See .env.example for details."
+        )
+        blogger_info.setWordWrap(True)
+        blogger_layout.addWidget(blogger_info)
+
+        open_env_btn = QPushButton("Open .env File")
+        open_env_btn.clicked.connect(self._open_env_file)
+        blogger_layout.addWidget(open_env_btn)
+
+        self.blogger_config_group.setLayout(blogger_layout)
+        layout.addWidget(self.blogger_config_group)
+
+        # WordPress configuration
+        self.wordpress_config_group = QGroupBox("WordPress Settings")
+        wordpress_layout = QFormLayout()
+
+        # WordPress URL
+        self.wordpress_url_edit = QLineEdit()
+        self.wordpress_url_edit.setPlaceholderText("https://yoursite.com")
+        wordpress_layout.addRow("WordPress URL:", self.wordpress_url_edit)
+
+        # WordPress Username
+        self.wordpress_username_edit = QLineEdit()
+        self.wordpress_username_edit.setPlaceholderText("your-username")
+        wordpress_layout.addRow("Username:", self.wordpress_username_edit)
+
+        # WordPress Password/App Password
+        password_layout = QHBoxLayout()
+        self.wordpress_password_edit = QLineEdit()
+        self.wordpress_password_edit.setPlaceholderText("Application Password")
+        self.wordpress_password_edit.setEchoMode(QLineEdit.Password)
+        password_layout.addWidget(self.wordpress_password_edit)
+
+        show_pass_btn = QPushButton("Show")
+        show_pass_btn.setCheckable(True)
+        show_pass_btn.toggled.connect(
+            lambda checked: self.wordpress_password_edit.setEchoMode(
+                QLineEdit.Normal if checked else QLineEdit.Password
+            )
+        )
+        password_layout.addWidget(show_pass_btn)
+        wordpress_layout.addRow("App Password:", password_layout)
+
+        # Test connection button
+        test_btn = QPushButton("Test WordPress Connection")
+        test_btn.clicked.connect(self._test_wordpress_connection)
+        wordpress_layout.addRow("", test_btn)
+
+        # Save button
+        save_btn = QPushButton("Save WordPress Settings")
+        save_btn.clicked.connect(self._save_wordpress_config)
+        wordpress_layout.addRow("", save_btn)
+
+        self.wordpress_config_group.setLayout(wordpress_layout)
+        self.wordpress_config_group.setVisible(False)  # Hide by default
+        layout.addWidget(self.wordpress_config_group)
+
+        # Info section
+        info_group = QGroupBox("ℹ️ Information")
+        info_layout = QVBoxLayout()
+
+        info_text = QLabel(
+            "<b>Google Blogger:</b><br>"
+            "• Free blogging platform by Google<br>"
+            "• Requires OAuth2 authentication<br>"
+            "• Configure via .env file<br><br>"
+            "<b>WordPress:</b><br>"
+            "• Self-hosted or WordPress.com<br>"
+            "• Requires WordPress REST API enabled<br>"
+            "• Use Application Passwords for authentication<br>"
+            "• Create Application Password: Settings → Users → Application Passwords"
+        )
+        info_text.setWordWrap(True)
+        info_layout.addWidget(info_text)
+
+        info_group.setLayout(info_layout)
+        layout.addWidget(info_group)
+
+        layout.addStretch()
+
+    def _on_platform_changed(self):
+        """Handle blog platform selection change"""
+        if self.blogger_radio.isChecked():
+            self.blog_platform = "blogger"
+            self.blogger_config_group.setVisible(True)
+            self.wordpress_config_group.setVisible(False)
+        else:
+            self.blog_platform = "wordpress"
+            self.blogger_config_group.setVisible(False)
+            self.wordpress_config_group.setVisible(True)
+
+        self._save_session()
+        self._log("INFO", f"Blog platform changed to: {self.blog_platform}")
+
+    def _open_env_file(self):
+        """Open .env file in default editor"""
+        env_path = Path(".env")
+        if env_path.exists():
+            import os
+            os.startfile(str(env_path))
+        else:
+            QMessageBox.warning(self, "Warning", ".env file not found")
+
+    def _test_wordpress_connection(self):
+        """Test WordPress connection"""
+        url = self.wordpress_url_edit.text().strip()
+        username = self.wordpress_username_edit.text().strip()
+        password = self.wordpress_password_edit.text().strip()
+
+        if not all([url, username, password]):
+            QMessageBox.warning(self, "Warning",
+                "Please fill in all WordPress credentials")
+            return
+
+        try:
+            self._log("INFO", "Testing WordPress connection...")
+            wordpress = WordPressPublisher(url, username, password)
+            success, message = wordpress.test_connection()
+
+            if success:
+                QMessageBox.information(self, "Success", message)
+                self._log("INFO", f"WordPress connection: {message}")
+            else:
+                QMessageBox.warning(self, "Connection Failed", message)
+                self._log("ERROR", f"WordPress connection failed: {message}")
+
+        except Exception as e:
+            error_msg = f"Error testing connection: {str(e)}"
+            QMessageBox.critical(self, "Error", error_msg)
+            self._log("ERROR", error_msg)
+
+    def _save_wordpress_config(self):
+        """Save WordPress configuration"""
+        self.wordpress_url = self.wordpress_url_edit.text().strip()
+        self.wordpress_username = self.wordpress_username_edit.text().strip()
+        self.wordpress_password = self.wordpress_password_edit.text().strip()
+
+        if all([self.wordpress_url, self.wordpress_username, self.wordpress_password]):
+            self._save_session()
+            QMessageBox.information(self, "Success",
+                "WordPress settings saved successfully!")
+            self._log("INFO", "WordPress settings saved")
+        else:
+            QMessageBox.warning(self, "Warning",
+                "Please fill in all WordPress credentials")
 
     def _build_ai_settings_tab(self, parent):
         """Build the AI Settings tab with button to open settings dialog"""
@@ -475,6 +862,7 @@ class MainWindow(QMainWindow):
         self.btn_hist_refresh.clicked.connect(self._refresh_shortened_history)
         self.btn_hist_edit.clicked.connect(self._edit_shortened_item)
         self.btn_hist_delete.clicked.connect(self._remove_shortened_item)
+        self.language_combo.currentIndexChanged.connect(self._save_session)
 
     def _validate_config(self):
         try:
@@ -641,6 +1029,9 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.status_label.setText("Starting...")
 
+        # Get selected language
+        selected_language = self.language_combo.currentData()
+
         self.worker = WorkerThread(
             video_source="youtube" if is_yt else "local",
             youtube_url=self.youtube_url_edit.text().strip(),
@@ -649,12 +1040,20 @@ class MainWindow(QMainWindow):
             apk_links=self._collect_apk_links(),
             skip_download=self.skip_download_cb.isChecked(),
             skip_blog=self.skip_blog_cb.isChecked(),
-            draft_mode=self.draft_cb.isChecked()
+            draft_mode=self.draft_cb.isChecked(),
+            blog_platform=self.blog_platform,
+            wordpress_config={
+                'url': self.wordpress_url,
+                'username': self.wordpress_username,
+                'password': self.wordpress_password
+            },
+            language=selected_language
         )
         self.worker.log.connect(lambda m: self._log("INFO" if m.startswith("[INFO]") else "LOG", m))
         self.worker.progress.connect(self._on_progress)
         self.worker.completed.connect(self._on_completed)
         self.worker.step_done.connect(self._show_toast)
+        self.worker.content_generated.connect(self._on_content_generated)
         self.worker.start()
 
     def _stop_process(self):
@@ -668,6 +1067,39 @@ class MainWindow(QMainWindow):
     def _on_progress(self, value: int, status: str):
         self.progress.setValue(max(0, min(100, value)))
         self.status_label.setText(status)
+
+    def _on_content_generated(self, title: str, content: str):
+        """Handle content generation and show preview dialog"""
+        self._log("STEP", "Content generated, showing preview...")
+        self.status_label.setText("Reviewing content...")
+
+        # Get current language for display
+        current_language = self.language_combo.currentData()
+
+        # Show preview dialog
+        dialog = ContentPreviewDialog(title, content, self, language=current_language)
+        result = dialog.exec_()
+
+        if result == QDialog.Accepted:
+            approved, regenerate = dialog.get_result()
+
+            if approved:
+                # User approved the content
+                self._log("INFO", "✓ Content approved by user")
+                self._show_toast("Content approved ✓")
+                self.worker.approved_content = dialog.get_content()
+                self.worker.user_approved = True
+                self.worker.should_regenerate = False
+            elif regenerate:
+                # User wants to regenerate
+                self._log("INFO", "🔄 Regenerating content...")
+                self._show_toast("Regenerating content...")
+                self.worker.user_approved = False
+                self.worker.should_regenerate = True
+        else:
+            # User cancelled
+            self._log("WARNING", "Content preview cancelled by user")
+            self._stop_process()
 
     def _on_completed(self, success: bool, message: str):
         self.btn_start.setEnabled(True)
@@ -806,7 +1238,12 @@ class MainWindow(QMainWindow):
                 "skip_blog": self.skip_blog_cb.isChecked(),
                 "draft": self.draft_cb.isChecked(),
                 "shorteners": self.shorteners,
-                "selected_shortener": self.shortener_combo.currentText() if self.shortener_combo.currentIndex() >= 0 else ""
+                "selected_shortener": self.shortener_combo.currentText() if self.shortener_combo.currentIndex() >= 0 else "",
+                "blog_platform": self.blog_platform,
+                "wordpress_url": self.wordpress_url,
+                "wordpress_username": self.wordpress_username,
+                "wordpress_password": self.wordpress_password,
+                "language": self.language_combo.currentData() if self.language_combo.currentIndex() >= 0 else "vietnamese"
             }
             self.session_path.write_text(__import__("json").dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
@@ -846,6 +1283,27 @@ class MainWindow(QMainWindow):
                 idx = self.shortener_combo.findText(sel)
                 if idx >= 0:
                     self.shortener_combo.setCurrentIndex(idx)
+            # Load blog platform configuration
+            self.blog_platform = data.get("blog_platform", "blogger")
+            if self.blog_platform == "wordpress":
+                self.wordpress_radio.setChecked(True)
+            else:
+                self.blogger_radio.setChecked(True)
+            self.wordpress_url = data.get("wordpress_url", "")
+            self.wordpress_username = data.get("wordpress_username", "")
+            self.wordpress_password = data.get("wordpress_password", "")
+            # Update WordPress form fields
+            self.wordpress_url_edit.setText(self.wordpress_url)
+            self.wordpress_username_edit.setText(self.wordpress_username)
+            self.wordpress_password_edit.setText(self.wordpress_password)
+
+            # Load language preference
+            saved_language = data.get("language", "vietnamese")
+            for i in range(self.language_combo.count()):
+                if self.language_combo.itemData(i) == saved_language:
+                    self.language_combo.setCurrentIndex(i)
+                    break
+
             self._refresh_shortened_history()
         except Exception:
             pass
