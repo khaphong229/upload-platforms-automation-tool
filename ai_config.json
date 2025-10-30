@@ -1,0 +1,39 @@
+{
+  "active_provider": "gemini",
+  "providers": {
+    "gemini": {
+      "api_key": "AIzaSyBRuS1KbfrDV46CexlCoC3YFd-isfmtNqU",
+      "model": "gemini-2.0-flash",
+      "temperature": 0.7,
+      "max_tokens": 1000,
+      "enabled": true
+    },
+    "openai": {
+      "api_key": "",
+      "model": "gpt-3.5-turbo",
+      "temperature": 0.7,
+      "max_tokens": 1000,
+      "enabled": false
+    },
+    "claude": {
+      "api_key": "",
+      "model": "claude-3-haiku",
+      "temperature": 0.7,
+      "max_tokens": 1000,
+      "enabled": false
+    },
+    "custom": {
+      "api_key": "",
+      "api_url": "",
+      "model": "custom-model",
+      "temperature": 0.7,
+      "max_tokens": 1000,
+      "enabled": false
+    }
+  },
+  "prompts": {
+    "blog_post": "default_blog",
+    "tiktok_caption": "default_tiktok"
+  },
+  "updated_at": "2025-10-30T19:05:14.395742"
+}

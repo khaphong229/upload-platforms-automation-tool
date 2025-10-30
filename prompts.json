@@ -1,0 +1,37 @@
+{
+  "default_blog": {
+    "name": "Default Blog Post",
+    "template": "Write a comprehensive blog post about the following video and app:\n\nTITLE: {title}\n\nVIDEO INFORMATION:\nTitle: {video_title}\nDescription: {video_description}\n\nAPK DOWNLOAD LINKS:\n{apk_links_text}\n\nThe blog post should:\n1. Have an engaging introduction about the app/game\n2. Describe key features and benefits\n3. Include the download links prominently\n4. Have a clear call-to-action\n5. Be SEO-friendly with appropriate headings and structure\n6. Be between 500-800 words\n\nFormat the blog post in HTML with appropriate tags (h1, h2, p, ul, li, etc.)",
+    "type": "blog",
+    "created_at": "2025-10-30T19:05:14.396602",
+    "is_default": true
+  },
+  "default_tiktok": {
+    "name": "Default TikTok Caption",
+    "template": "Create a short, engaging TikTok caption (maximum {max_length} characters) for a video about '{title}'. Include emojis and make it attention-grabbing. The caption should encourage viewers to check out the blog post at {blog_url} for download links.",
+    "type": "tiktok",
+    "created_at": "2025-10-30T19:05:14.396608",
+    "is_default": true
+  },
+  "gaming_blog": {
+    "name": "Gaming Blog Post",
+    "template": "Create an exciting blog post about the following gaming app:\n\nTITLE: {title}\n\nVIDEO INFORMATION:\nTitle: {video_title}\nDescription: {video_description}\n\nDOWNLOAD LINKS:\n{apk_links_text}\n\nWrite a blog post that:\n1. Opens with a hook about why this game is trending\n2. Describes gameplay mechanics and unique features\n3. Highlights graphics, controls, and user experience\n4. Includes download links with clear installation instructions\n5. Has sections: Introduction, Features, Gameplay, Download Guide\n6. Uses gaming-related keywords for SEO\n7. Length: 600-900 words\n8. Format in HTML with proper heading tags",
+    "type": "blog",
+    "created_at": "2025-10-30T19:05:14.396609",
+    "is_default": false
+  },
+  "app_review_blog": {
+    "name": "App Review Style",
+    "template": "Write a detailed app review for:\n\nTITLE: {title}\n\nVIDEO INFORMATION:\nTitle: {video_title}\nDescription: {video_description}\n\nDOWNLOAD LINKS:\n{apk_links_text}\n\nStructure the review as follows:\n1. Introduction - What the app does\n2. Key Features - Bullet points of main features\n3. Pros and Cons - Balanced review\n4. User Experience - Interface and usability\n5. Download Information - Links and installation guide\n6. Conclusion - Final recommendation\n7. Use HTML formatting with h2, h3, p, ul, li tags\n8. Length: 700-1000 words",
+    "type": "blog",
+    "created_at": "2025-10-30T19:05:14.396611",
+    "is_default": false
+  },
+  "viral_tiktok": {
+    "name": "Viral TikTok Caption",
+    "template": "Create a viral-style TikTok caption (max {max_length} chars) for '{title}'. Use trending emojis, create FOMO, include a question to boost engagement. Mention: Download link in bio! {blog_url}",
+    "type": "tiktok",
+    "created_at": "2025-10-30T19:05:14.396612",
+    "is_default": false
+  }
+}

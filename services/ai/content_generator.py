@@ -1,41 +1,74 @@
 import logging
 import google.generativeai as genai
 from config import GEMINI_API_KEY
+from .ai_config import AIConfig
+from .prompt_manager import PromptManager
 
 logger = logging.getLogger(__name__)
 
 class ContentGenerator:
-    """Service to generate content using Google Gemini API"""
-    
+    """Service to generate content using AI (supports multiple providers)"""
+
     def __init__(self, api_key=None):
-        self.api_key = api_key or GEMINI_API_KEY
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash')
+        # Load AI configuration and prompt manager
+        self.ai_config = AIConfig()
+        self.prompt_manager = PromptManager()
+
+        # Get active provider configuration
+        self.active_provider = self.ai_config.get_active_provider()
+        provider_config = self.ai_config.get_provider_config()
+
+        # Initialize AI model based on provider
+        if self.active_provider == "gemini":
+            self.api_key = api_key or provider_config.get('api_key') or GEMINI_API_KEY
+            genai.configure(api_key=self.api_key)
+            model_name = provider_config.get('model', 'gemini-2.0-flash')
+            self.model = genai.GenerativeModel(model_name)
+            logger.info(f"Initialized Gemini model: {model_name}")
+        else:
+            # For future: support for other providers
+            logger.warning(f"Provider '{self.active_provider}' not fully implemented, falling back to Gemini")
+            self.api_key = api_key or GEMINI_API_KEY
+            genai.configure(api_key=self.api_key)
+            self.model = genai.GenerativeModel('gemini-2.0-flash')
     
-    def generate_blog_post(self, title, video_info, apk_links, max_tokens=1000):
+    def generate_blog_post(self, title, video_info, apk_links, max_tokens=None, prompt_id=None):
         """
         Generate a blog post about a video with APK links
-        
+
         Args:
             title (str): The title of the blog post
             video_info (dict): Information about the video
             apk_links (dict): Dictionary of APK links (original -> shortened)
             max_tokens (int): Maximum number of tokens for the generated content
-            
+            prompt_id (str): ID of the prompt template to use (optional)
+
         Returns:
             str: The generated blog post content
         """
         logger.info(f"Generating blog post for: {title}")
-        
-        # Create a prompt for the AI
-        prompt = self._create_blog_prompt(title, video_info, apk_links)
+
+        # Get provider configuration
+        provider_config = self.ai_config.get_provider_config()
+        if max_tokens is None:
+            max_tokens = provider_config.get('max_tokens', 1000)
+
+        # Get the selected prompt
+        if prompt_id is None:
+            prompt_id = self.ai_config.get_selected_prompt('blog_post')
+
+        # Create a prompt for the AI using prompt manager
+        prompt = self._create_blog_prompt(title, video_info, apk_links, prompt_id)
         
         try:
-            # Call the Gemini API
+            # Get temperature from config
+            temperature = provider_config.get('temperature', 0.7)
+
+            # Call the AI API
             response = self.model.generate_content(
                 prompt,
                 generation_config={
-                    "temperature": 0.7,
+                    "temperature": temperature,
                     "max_output_tokens": max_tokens,
                 }
             )
@@ -51,41 +84,53 @@ class ContentGenerator:
             # Fallback to a simple template if AI generation fails
             return self._create_fallback_content(title, video_info, apk_links)
     
-    def _create_blog_prompt(self, title, video_info, apk_links):
+    def _create_blog_prompt(self, title, video_info, apk_links, prompt_id):
         """Create a prompt for the AI to generate a blog post"""
-        
+
         # Extract video information
-        video_title = video_info.get('title', title)
-        video_description = video_info.get('description', '')
-        
+        video_title = video_info.get('title', title) if video_info else title
+        video_description = video_info.get('description', '') if video_info else ''
+
         # Create a list of APK links
         apk_links_text = "\n".join([f"- {name}: {url}" for name, url in apk_links.items()])
-        
-        # Create the prompt
-        prompt = f"""
-        Write a comprehensive blog post about the following video and app:
-        
-        TITLE: {title}
-        
-        VIDEO INFORMATION:
-        Title: {video_title}
-        Description: {video_description}
-        
-        APK DOWNLOAD LINKS:
-        {apk_links_text}
-        
-        The blog post should:
-        1. Have an engaging introduction about the app/game
-        2. Describe key features and benefits
-        3. Include the download links prominently
-        4. Have a clear call-to-action
-        5. Be SEO-friendly with appropriate headings and structure
-        6. Be between 500-800 words
-        
-        Format the blog post in HTML with appropriate tags (h1, h2, p, ul, li, etc.)
-        """
-        
-        return prompt
+
+        try:
+            # Use prompt manager to format the prompt
+            prompt = self.prompt_manager.format_prompt(
+                prompt_id,
+                title=title,
+                video_title=video_title,
+                video_description=video_description,
+                apk_links_text=apk_links_text
+            )
+            logger.info(f"Using prompt template: {prompt_id}")
+            return prompt
+        except Exception as e:
+            logger.warning(f"Error formatting prompt '{prompt_id}': {str(e)}. Using fallback.")
+            # Fallback to default prompt
+            prompt = f"""
+Write a comprehensive blog post about the following video and app:
+
+TITLE: {title}
+
+VIDEO INFORMATION:
+Title: {video_title}
+Description: {video_description}
+
+APK DOWNLOAD LINKS:
+{apk_links_text}
+
+The blog post should:
+1. Have an engaging introduction about the app/game
+2. Describe key features and benefits
+3. Include the download links prominently
+4. Have a clear call-to-action
+5. Be SEO-friendly with appropriate headings and structure
+6. Be between 500-800 words
+
+Format the blog post in HTML with appropriate tags (h1, h2, p, ul, li, etc.)
+"""
+            return prompt
     
     def _create_fallback_content(self, title, video_info, apk_links):
         """Create a simple blog post template as fallback"""
@@ -123,28 +168,47 @@ class ContentGenerator:
         
         return html_content
     
-    def generate_tiktok_caption(self, title, blog_url, max_length=150):
+    def generate_tiktok_caption(self, title, blog_url, max_length=150, prompt_id=None):
         """
         Generate a caption for TikTok video
-        
+
         Args:
             title (str): The title of the video
             blog_url (str): URL to the blog post
             max_length (int): Maximum length of the caption
-            
+            prompt_id (str): ID of the prompt template to use (optional)
+
         Returns:
             str: The generated caption
         """
         logger.info(f"Generating TikTok caption for: {title}")
-        
+
+        # Get provider configuration
+        provider_config = self.ai_config.get_provider_config()
+        temperature = provider_config.get('temperature', 0.7)
+
+        # Get the selected prompt
+        if prompt_id is None:
+            prompt_id = self.ai_config.get_selected_prompt('tiktok_caption')
+
         try:
-            # Call the Gemini API
-            prompt = f"Create a short, engaging TikTok caption (maximum {max_length} characters) for a video about '{title}'. Include emojis and make it attention-grabbing. The caption should encourage viewers to check out the blog post at {blog_url} for download links."
-            
+            # Use prompt manager to format the prompt
+            try:
+                prompt = self.prompt_manager.format_prompt(
+                    prompt_id,
+                    title=title,
+                    blog_url=blog_url,
+                    max_length=max_length
+                )
+            except Exception as e:
+                logger.warning(f"Error formatting TikTok prompt: {str(e)}. Using fallback.")
+                prompt = f"Create a short, engaging TikTok caption (maximum {max_length} characters) for a video about '{title}'. Include emojis and make it attention-grabbing. The caption should encourage viewers to check out the blog post at {blog_url} for download links."
+
+            # Call the AI API
             response = self.model.generate_content(
                 prompt,
                 generation_config={
-                    "temperature": 0.7,
+                    "temperature": temperature,
                     "max_output_tokens": 100,
                 }
             )

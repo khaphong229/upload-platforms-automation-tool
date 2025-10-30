@@ -21,6 +21,7 @@ from services.shortener import URLShortener
 from services.ai import ContentGenerator
 from services.blogger import BloggerPublisher
 from utils import sanitize_filename, clean_temp_dir
+from qt_ai_settings import AISettingsDialog
 
 
 class APKLinkDialog(QDialog):
@@ -201,6 +202,10 @@ class MainWindow(QMainWindow):
         shortener_tab = QWidget()
         tabs.addTab(shortener_tab, "Link Shorteners")
 
+        # Add AI Settings tab
+        ai_settings_tab = QWidget()
+        tabs.addTab(ai_settings_tab, "AI Settings")
+
         outer = QVBoxLayout(content_tab)
 
         # Source group
@@ -353,6 +358,95 @@ class MainWindow(QMainWindow):
         h_layout.addLayout(h_btns)
         hist_group.setLayout(h_layout)
         s_outer.addWidget(hist_group)
+
+        # Build AI Settings tab UI
+        self._build_ai_settings_tab(ai_settings_tab)
+
+    def _build_ai_settings_tab(self, parent):
+        """Build the AI Settings tab with button to open settings dialog"""
+        layout = QVBoxLayout(parent)
+
+        # Info label
+        info_label = QLabel(
+            "<h2>AI Configuration & Prompt Management</h2>"
+            "<p>Configure your AI provider settings and manage custom prompts for content generation.</p>"
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        # Open settings button
+        open_settings_btn = QPushButton("Open AI Settings")
+        open_settings_btn.setMinimumHeight(50)
+        open_settings_btn.clicked.connect(self._open_ai_settings_dialog)
+        layout.addWidget(open_settings_btn)
+
+        # Current settings display
+        settings_group = QGroupBox("Current AI Configuration")
+        settings_layout = QFormLayout()
+
+        from services.ai import AIConfig, PromptManager
+        ai_config = AIConfig()
+        prompt_manager = PromptManager()
+
+        active_provider = ai_config.get_active_provider()
+        provider_config = ai_config.get_provider_config()
+
+        settings_layout.addRow("Active Provider:", QLabel(active_provider.title()))
+        settings_layout.addRow("Model:", QLabel(provider_config.get('model', 'N/A')))
+        settings_layout.addRow("Temperature:", QLabel(str(provider_config.get('temperature', 0.7))))
+        settings_layout.addRow("Max Tokens:", QLabel(str(provider_config.get('max_tokens', 1000))))
+
+        # Selected prompts
+        blog_prompt_id = ai_config.get_selected_prompt('blog_post')
+        blog_prompt = prompt_manager.get_prompt(blog_prompt_id)
+        settings_layout.addRow("Blog Prompt:",
+            QLabel(blog_prompt['name'] if blog_prompt else 'N/A'))
+
+        tiktok_prompt_id = ai_config.get_selected_prompt('tiktok_caption')
+        tiktok_prompt = prompt_manager.get_prompt(tiktok_prompt_id)
+        settings_layout.addRow("TikTok Prompt:",
+            QLabel(tiktok_prompt['name'] if tiktok_prompt else 'N/A'))
+
+        settings_group.setLayout(settings_layout)
+        layout.addWidget(settings_group)
+
+        # Tips
+        tips_group = QGroupBox("Tips")
+        tips_layout = QVBoxLayout()
+        tips_text = QLabel(
+            "• Configure your preferred AI provider (Gemini, OpenAI, Claude, or Custom)\n"
+            "• Set API keys and model parameters\n"
+            "• Create custom prompts for blog posts and TikTok captions\n"
+            "• Manage and select different prompt templates\n"
+            "• Default prompts cannot be edited or deleted"
+        )
+        tips_text.setWordWrap(True)
+        tips_layout.addWidget(tips_text)
+        tips_group.setLayout(tips_layout)
+        layout.addWidget(tips_group)
+
+        layout.addStretch()
+
+    def _open_ai_settings_dialog(self):
+        """Open the AI settings dialog"""
+        dialog = AISettingsDialog(self)
+        dialog.exec_()
+
+        # Refresh the AI settings tab display after dialog closes
+        # Find the AI Settings tab and rebuild it
+        tabs = self.centralWidget().findChild(QTabWidget)
+        if tabs:
+            for i in range(tabs.count()):
+                if tabs.tabText(i) == "AI Settings":
+                    # Remove old tab
+                    old_widget = tabs.widget(i)
+                    tabs.removeTab(i)
+
+                    # Create new tab with updated settings
+                    ai_settings_tab = QWidget()
+                    self._build_ai_settings_tab(ai_settings_tab)
+                    tabs.insertTab(i, ai_settings_tab, "AI Settings")
+                    break
 
     def _wire_events(self):
         self.source_youtube.toggled.connect(self._on_source_changed)
