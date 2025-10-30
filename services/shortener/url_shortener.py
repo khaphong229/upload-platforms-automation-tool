@@ -1,6 +1,7 @@
 import logging
 import pyshorteners
 import requests
+from typing import Dict, List, Optional, Tuple, Any
 from config import SHORTENER_API_KEY
 
 logger = logging.getLogger(__name__)
@@ -80,3 +81,67 @@ class URLShortener:
                 result[url] = url  # Use original URL if shortening fails
         
         return result 
+
+    # --- Custom template-based shortener support ---
+    def shorten_with_template(self, url: str, template: str, headers_text: str = '', keys: Optional[List[str]] = None) -> str:
+        """
+        Shorten a URL using a custom HTTP endpoint template.
+
+        Args:
+            url: Original URL
+            template: Template URL containing {url}
+            headers_text: lines of "Key: Value"
+            keys: preferred JSON keys to pick the shortened URL from
+
+        Returns:
+            Shortened URL if extracted; otherwise returns original url
+        """
+        try:
+            final_url = template.replace('{url}', requests.utils.quote(url, safe=''))
+            headers: Dict[str, str] = {}
+            for line in (headers_text or '').splitlines():
+                if ':' in line:
+                    k, v = line.split(':', 1)
+                    headers[k.strip()] = v.strip()
+
+            resp = requests.get(final_url, headers=headers, timeout=20)
+            text = resp.text.strip()
+
+            # Try JSON parse
+            short = None
+            try:
+                data = resp.json()
+                short = self._extract_url_from_json(data, keys)
+            except Exception:
+                pass
+
+            if not short:
+                if text.startswith('http'):
+                    short = text
+
+            return short or url
+        except Exception as e:
+            logger.error(f"Template shortener failed: {e}")
+            return url
+
+    def _extract_url_from_json(self, data: Any, keys: Optional[List[str]] = None) -> Optional[str]:
+        preferred = keys or []
+        common = ['shortenedUrl', 'short_url', 'shortUrl', 'result_url', 'url', 'link']
+        if isinstance(data, dict):
+            for k in list(preferred) + common:
+                v = data.get(k)
+                if isinstance(v, str) and v.startswith('http'):
+                    return v
+        # recursive search
+        stack = [data]
+        while stack:
+            cur = stack.pop()
+            if isinstance(cur, dict):
+                for v in cur.values():
+                    if isinstance(v, str) and v.startswith('http'):
+                        return v
+                    elif isinstance(v, (dict, list)):
+                        stack.append(v)
+            elif isinstance(cur, list):
+                stack.extend(cur)
+        return None

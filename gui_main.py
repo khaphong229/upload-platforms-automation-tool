@@ -12,14 +12,14 @@ from datetime import datetime
 
 # Import configuration
 from config import validate_config
-from config import DOWNLOAD_DIR, TEMP_DIR, TIKTOK_SESSION_ID
+from config import DOWNLOAD_DIR, TEMP_DIR
 
 # Import services
 from services.youtube import YouTubeDownloader
 from services.shortener import URLShortener
 from services.ai import ContentGenerator
 from services.blogger import BloggerPublisher
-from services.tiktok import TikTokUploader, NewTikTokUploader
+ 
 
 # Import utilities
 from utils import sanitize_filename, clean_temp_dir
@@ -55,7 +55,7 @@ class ContentDistributionGUI:
         self.apk_links = []
         self.skip_download = tk.BooleanVar()
         self.skip_blog = tk.BooleanVar()
-        self.skip_tiktok = tk.BooleanVar()
+        
         self.draft_mode = tk.BooleanVar()
         
         # Progress tracking
@@ -63,12 +63,7 @@ class ContentDistributionGUI:
         self.status_var = tk.StringVar(value="Ready")
         self.is_processing = False
         
-        # Initialize batch uploader
-        try:
-            self.batch_uploader = EnhancedTikTokUploader()
-        except Exception as e:
-            self.batch_uploader = None
-            print(f"Warning: Could not initialize batch uploader: {e}")
+        
         
         # Logging setup
         self.log_queue = queue.Queue()
@@ -243,7 +238,6 @@ class ContentDistributionGUI:
 
         ttk.Checkbutton(options_frame, text="Skip Download", variable=self.skip_download).grid(row=0, column=0, sticky=tk.W)
         ttk.Checkbutton(options_frame, text="Skip Blog Creation", variable=self.skip_blog).grid(row=0, column=1, sticky=tk.W, padx=(20, 0))
-        ttk.Checkbutton(options_frame, text="Skip TikTok Upload", variable=self.skip_tiktok).grid(row=1, column=0, sticky=tk.W)
         ttk.Checkbutton(options_frame, text="Save as Draft", variable=self.draft_mode).grid(row=1, column=1, sticky=tk.W, padx=(20, 0))
         
         # Progress section (now in scrollable_frame instead of tab)
@@ -283,8 +277,7 @@ class ContentDistributionGUI:
         # Initialize UI state
         self.on_source_change()
 
-        # Load existing profiles
-        self.refresh_batch_profiles()
+        # Batch uploader removed
 
     def validate_configuration(self):
         """Validate configuration on startup"""
@@ -441,7 +434,7 @@ class ContentDistributionGUI:
             # Clean old temporary files
             clean_temp_dir(older_than_days=1)
             
-            total_steps = 4  # Download, Shorten, Blog, TikTok
+            total_steps = 3  # Download, Shorten, Blog
             current_step = 0
             
             # Step 1: Get video (download or use local)
@@ -469,13 +462,7 @@ class ContentDistributionGUI:
                 self.update_progress(current_step, total_steps, "Creating blog post...")
                 blog_post = self.create_blog_post(video_info, shortened_links)
             
-            # Step 4: Upload to TikTok
-            if not self.skip_tiktok.get() and video_info and self.is_processing:
-                current_step += 1
-                self.update_progress(current_step, total_steps, "Uploading to TikTok...")
-                tiktok_result = self.upload_to_tiktok(video_info, blog_post)
-                if not tiktok_result:
-                    raise Exception("TikTok upload failed - check logs for details")
+            # TikTok upload removed
             
             if self.is_processing:
                 self.update_progress(100, 100, "Process completed successfully!")
@@ -576,57 +563,7 @@ class ContentDistributionGUI:
             else:
                 raise e
     
-    def upload_to_tiktok(self, video_info, blog_post):
-        """Upload video to TikTok using new tiktok-uploader library"""
-        try:
-            content_generator = ContentGenerator()
-            
-            # Generate caption with or without blog URL
-            if blog_post and blog_post.get('url'):
-                caption = content_generator.generate_tiktok_caption(self.title.get(), blog_post['url'])
-            else:
-                # No blog post - generate caption without blog URL
-                caption = content_generator.generate_tiktok_caption(self.title.get(), None)
-            
-            # Check for cookies.txt file
-            cookies_file = "cookies.txt"
-            if not os.path.exists(cookies_file):
-                self.log_message("cookies.txt file not found. Creating empty file - please add your TikTok cookies.", "WARNING")
-                # Create empty cookies file
-                with open(cookies_file, 'w') as f:
-                    f.write("# Add your TikTok cookies here\n")
-            
-            # Check if cookies file has actual content
-            with open(cookies_file, 'r') as f:
-                content = f.read().strip()
-                if not content or content.startswith('#'):
-                    self.log_message("cookies.txt is empty. TikTok upload may fail without proper authentication.", "WARNING")
-            
-            # Use new TikTok uploader with cookies authentication
-            tiktok = NewTikTokUploader(
-                cookies_file=cookies_file,
-                session_id=TIKTOK_SESSION_ID,
-                headless=False
-            )
-            
-            # Add hashtags to make the video more discoverable
-            hashtags = ["#viral", "#fyp", "#trending"]
-            
-            result = tiktok.upload_video(
-                video_path=video_info['file_path'],
-                caption=caption,
-                hashtags=hashtags
-            )
-            
-            if result['status'] == 'success':
-                self.log_message(f"Video uploaded to TikTok successfully!", "INFO")
-                return {'url': 'TikTok upload completed', 'status': 'success'}
-            else:
-                raise Exception(f"Upload failed: {result.get('error', 'Unknown error')}")
-                
-        except Exception as e:
-            self.log_message(f"Error uploading to TikTok: {str(e)}", "ERROR")
-            return None
+    
     
     def update_progress(self, current, total, status):
         """Update progress bar and status"""
@@ -1018,14 +955,7 @@ class SettingsDialog:
         ttk.Label(dir_frame, text="Temp Directory:").grid(row=1, column=0, sticky=tk.W, pady=5)
         ttk.Label(dir_frame, text=str(TEMP_DIR)).grid(row=1, column=1, sticky=tk.W, pady=5)
         
-        # TikTok tab
-        tiktok_frame = ttk.Frame(notebook, padding="10")
-        notebook.add(tiktok_frame, text="TikTok")
-
-        self.tiktok_session_id = tk.StringVar()
-
-        ttk.Label(tiktok_frame, text="TikTok sessionid:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(tiktok_frame, textvariable=self.tiktok_session_id, width=60).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5)
+        # TikTok settings removed
 
         # Configuration tab
         config_frame = ttk.Frame(notebook, padding="10")

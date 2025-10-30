@@ -1,0 +1,867 @@
+#!/usr/bin/env python3
+import sys
+import os
+from pathlib import Path
+from functools import partial
+from typing import Dict, List, Tuple
+
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QMainWindow, QVBoxLayout, QHBoxLayout, QLabel,
+    QLineEdit, QPushButton, QFileDialog, QTabWidget, QRadioButton, QGroupBox,
+    QTextEdit, QListWidget, QListWidgetItem, QMessageBox, QCheckBox, QProgressBar,
+    QFormLayout, QDialog, QDialogButtonBox, QStyle, QComboBox
+)
+from PyQt5.QtGui import QPalette, QColor
+
+# Project imports
+from config import validate_config
+from services.youtube import YouTubeDownloader
+from services.shortener import URLShortener
+from services.ai import ContentGenerator
+from services.blogger import BloggerPublisher
+from utils import sanitize_filename, clean_temp_dir
+
+
+class APKLinkDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add APK Link")
+        self.setModal(True)
+        self.name_edit = QLineEdit(self)
+        self.url_edit = QLineEdit(self)
+
+        form = QFormLayout()
+        form.addRow("Link Name:", self.name_edit)
+        form.addRow("APK URL:", self.url_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout()
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+        self.setLayout(layout)
+
+    def get_result(self) -> Tuple[str, str]:
+        return self.name_edit.text().strip(), self.url_edit.text().strip()
+
+
+class WorkerThread(QThread):
+    log = pyqtSignal(str)
+    progress = pyqtSignal(int, str)
+    completed = pyqtSignal(bool, str)
+    step_done = pyqtSignal(str)
+
+    def __init__(self, *, video_source: str, youtube_url: str, local_path: str,
+                 title: str, apk_links: List[Tuple[str, str]],
+                 skip_download: bool, skip_blog: bool, draft_mode: bool):
+        super().__init__()
+        self.video_source = video_source
+        self.youtube_url = youtube_url
+        self.local_path = local_path
+        self.title = title
+        self.apk_links = apk_links
+        self.skip_download = skip_download
+        self.skip_blog = skip_blog
+        self.draft_mode = draft_mode
+
+    def safe_log(self, level: str, message: str):
+        self.log.emit(f"[{level}] {message}")
+
+    def run(self):
+        try:
+            clean_temp_dir(older_than_days=1)
+            total_steps = 3
+            step = 0
+
+            # Step 1: Get video
+            self.safe_log("STEP", "Prepare video source")
+            video_info = None
+            if not self.skip_download:
+                step += 1
+                self.progress.emit(int(step/total_steps*100), "Preparing video...")
+                if self.video_source == "youtube":
+                    try:
+                        self.safe_log("STEP", "Download video from YouTube")
+                        self.safe_log("INFO", "Downloading YouTube video...")
+                        filename = sanitize_filename(self.title)
+                        downloader = YouTubeDownloader()
+                        video_info = downloader.download_video(self.youtube_url, f"{filename}.mp4")
+                        self.safe_log("INFO", f"Video downloaded: {video_info['file_path']}")
+                    except Exception as e:
+                        self.safe_log("ERROR", f"Error downloading video: {str(e)}")
+                        self.completed.emit(False, str(e))
+                        return
+                else:
+                    self.safe_log("STEP", "Use local video file")
+                    path = Path(self.local_path)
+                    if not path.exists():
+                        self.safe_log("ERROR", f"Local video not found: {path}")
+                        self.completed.emit(False, f"Local video not found: {path}")
+                        return
+                    video_info = {
+                        'file_path': str(path),
+                        'title': self.title,
+                        'filename': path.name,
+                        'duration': None,
+                        'size': path.stat().st_size
+                    }
+                    self.safe_log("INFO", f"Using local video: {path}")
+            self.step_done.emit("Video ready")
+
+            # Step 2: Shorten APK links
+            self.safe_log("STEP", "Shorten APK links")
+            step += 1
+            self.progress.emit(int(step/total_steps*100), "Shortening links...")
+            shortened_links: Dict[str, str] = {}
+            try:
+                if self.apk_links:
+                    shortener = URLShortener()
+                    for name, url in self.apk_links:
+                        s = shortener.shorten_url(url)
+                        shortened_links[name] = s
+                        self.safe_log("INFO", f"Shortened: {name} - {s}")
+            except Exception as e:
+                self.safe_log("ERROR", f"Error shortening links: {str(e)}")
+                # Fallback to original links
+                shortened_links = {name: url for name, url in self.apk_links}
+            self.step_done.emit("Links shortened")
+
+            # Step 3: Create blog post
+            self.safe_log("STEP", "Create blog post")
+            blog_post = None
+            if not self.skip_blog:
+                step += 1
+                self.progress.emit(int(step/total_steps*100), "Creating blog post...")
+                try:
+                    content_generator = ContentGenerator()
+                    blog_content = content_generator.generate_blog_post(self.title, video_info, shortened_links)
+                    blogger = BloggerPublisher()
+                    blog_post = blogger.create_post(
+                        title=self.title,
+                        content=blog_content,
+                        labels=["APK", "Download", "Mobile App"],
+                        is_draft=self.draft_mode
+                    )
+                    self.safe_log("INFO", f"Blog post created: {blog_post['url']}")
+                except Exception as e:
+                    self.safe_log("ERROR", f"Error creating blog post: {str(e)}")
+                    self.completed.emit(False, str(e))
+                    return
+            self.step_done.emit("Blog created")
+
+            self.progress.emit(100, "Completed")
+            self.step_done.emit("All tasks completed")
+            self.completed.emit(True, "Success")
+
+        except Exception as e:
+            self.safe_log("ERROR", f"Unexpected error: {str(e)}")
+            self.completed.emit(False, str(e))
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Auto Content Distribution Tool (Qt)")
+        self.resize(1000, 800)
+        self.session_path = Path("last_session.json")
+        self.shorteners = []  # list of dicts: {name, template, headers_text, keys}
+        self.apk_links_data = []  # list of dicts: {name, original, short}
+
+        self.youtube_url_edit = QLineEdit()
+        self.title_edit = QLineEdit()
+        self.local_video_edit = FileDropLineEdit()
+        self.local_video_edit.setReadOnly(True)
+        self.source_youtube = QRadioButton("YouTube URL")
+        self.source_local = QRadioButton("Local Video File")
+        self.source_youtube.setChecked(True)
+
+        self.apk_list = QListWidget()
+        self.skip_download_cb = QCheckBox("Skip Download")
+        self.skip_blog_cb = QCheckBox("Skip Blog Creation")
+        self.draft_cb = QCheckBox("Save as Draft")
+
+        self.progress = QProgressBar()
+        self.status_label = QLabel("Ready")
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+
+        self.worker: WorkerThread = None
+        self._build_ui()
+        self._wire_events()
+        self._validate_config()
+        self._load_session()
+
+    def _build_ui(self):
+        tabs = QTabWidget()
+        content_tab = QWidget()
+        tabs.addTab(content_tab, "Content Distribution")
+        shortener_tab = QWidget()
+        tabs.addTab(shortener_tab, "Link Shorteners")
+
+        outer = QVBoxLayout(content_tab)
+
+        # Source group
+        source_group = QGroupBox("🎬 Video Source")
+        source_layout = QVBoxLayout()
+        row1 = QHBoxLayout()
+        row1.addWidget(self.source_youtube)
+        row1.addWidget(self.source_local)
+        row1.addStretch(1)
+        source_layout.addLayout(row1)
+
+        # YouTube
+        yt_row = QHBoxLayout()
+        yt_row.addWidget(QLabel("YouTube URL:"))
+        yt_row.addWidget(self.youtube_url_edit)
+        self.btn_get_info = QPushButton("Get Info")
+        yt_row.addWidget(self.btn_get_info)
+        source_layout.addLayout(yt_row)
+
+        # Local file
+        local_row = QHBoxLayout()
+        local_row.addWidget(QLabel("Video File:"))
+        local_row.addWidget(self.local_video_edit)
+        self.btn_browse = QPushButton("Browse")
+        local_row.addWidget(self.btn_browse)
+        source_layout.addLayout(local_row)
+        source_group.setLayout(source_layout)
+
+        # Title group
+        title_group = QGroupBox("📝 Blog Post Settings")
+        t_layout = QHBoxLayout()
+        t_layout.addWidget(QLabel("Blog Title:"))
+        t_layout.addWidget(self.title_edit)
+        title_group.setLayout(t_layout)
+
+        # APK links group
+        apk_group = QGroupBox("🔗 APK Links")
+        apk_layout = QVBoxLayout()
+        # Shortener selection
+        sel_row = QHBoxLayout()
+        sel_row.addWidget(QLabel("Shortener:"))
+        self.shortener_combo = QComboBox()
+        sel_row.addWidget(self.shortener_combo)
+        sel_row.addStretch(1)
+        apk_layout.addLayout(sel_row)
+        apk_layout.addWidget(self.apk_list)
+        apk_btn_row = QHBoxLayout()
+        self.btn_add_apk = QPushButton("Add APK Link")
+        self.btn_remove_apk = QPushButton("Remove Selected")
+        self.btn_clear_apk = QPushButton("Clear All")
+        apk_btn_row.addWidget(self.btn_add_apk)
+        apk_btn_row.addWidget(self.btn_remove_apk)
+        apk_btn_row.addWidget(self.btn_clear_apk)
+        apk_btn_row.addStretch(1)
+        apk_layout.addLayout(apk_btn_row)
+        apk_group.setLayout(apk_layout)
+
+        # Options
+        options_group = QGroupBox("⚙️ Processing Options")
+        opt_row = QHBoxLayout()
+        opt_row.addWidget(self.skip_download_cb)
+        opt_row.addWidget(self.skip_blog_cb)
+        opt_row.addWidget(self.draft_cb)
+        opt_row.addStretch(1)
+        options_group.setLayout(opt_row)
+
+        # Controls
+        ctrl_row = QHBoxLayout()
+        self.btn_start = QPushButton("Start Process")
+        self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setEnabled(False)
+        self.btn_clear_log = QPushButton("Clear Log")
+        ctrl_row.addWidget(self.btn_start)
+        ctrl_row.addWidget(self.btn_stop)
+        ctrl_row.addStretch(1)
+        ctrl_row.addWidget(self.btn_clear_log)
+
+        # Progress / Log
+        prog_row = QHBoxLayout()
+        prog_row.addWidget(self.progress)
+        prog_row.addWidget(self.status_label)
+
+        outer.addWidget(source_group)
+        outer.addWidget(title_group)
+        outer.addWidget(apk_group)
+        outer.addWidget(options_group)
+        outer.addLayout(ctrl_row)
+        outer.addLayout(prog_row)
+        outer.addWidget(self.log_text)
+
+        wrap = QWidget()
+        w_layout = QVBoxLayout()
+        w_layout.addWidget(tabs)
+        wrap.setLayout(w_layout)
+        self.setCentralWidget(wrap)
+
+        self._on_source_changed()
+        self._apply_dark_theme()
+        self._apply_icons()
+
+        # Build shorteners tab UI
+        s_outer = QVBoxLayout(shortener_tab)
+        s_form = QFormLayout()
+        self.s_name = QLineEdit()
+        self.s_template = QLineEdit()
+        self.s_headers = QTextEdit()
+        self.s_keys = QLineEdit()
+        self.s_headers.setPlaceholderText("Header-Name: value\nAuthorization: Bearer TOKEN")
+        self.s_template.setPlaceholderText("https://api.example.com/shorten?api_key=XXX&url={url}")
+        self.s_keys.setPlaceholderText("shortenedUrl,short_url,result_url")
+        s_form.addRow("Name", self.s_name)
+        s_form.addRow("Template URL", self.s_template)
+        s_form.addRow("Headers (key: value per line)", self.s_headers)
+        s_form.addRow("Response keys (comma)", self.s_keys)
+        s_outer.addLayout(s_form)
+        # Shortener list
+        s_list_row = QHBoxLayout()
+        from PyQt5.QtWidgets import QListWidget
+        self.shortener_list = QListWidget()
+        s_list_btns = QVBoxLayout()
+        self.btn_shortener_edit = QPushButton("Edit")
+        self.btn_shortener_delete = QPushButton("Delete")
+        s_list_btns.addWidget(self.btn_shortener_edit)
+        s_list_btns.addWidget(self.btn_shortener_delete)
+        s_list_btns.addStretch(1)
+        s_list_row.addWidget(self.shortener_list, 1)
+        s_list_row.addLayout(s_list_btns)
+        s_outer.addLayout(s_list_row)
+        # Add/Update controls
+        s_btns = QHBoxLayout()
+        self.btn_add_shortener = QPushButton("Add/Update Shortener")
+        self.btn_remove_shortener = QPushButton("Remove Selected Shortener")
+        s_btns.addWidget(self.btn_add_shortener)
+        s_btns.addWidget(self.btn_remove_shortener)
+        s_btns.addStretch(1)
+        s_outer.addLayout(s_btns)
+        # Shortened links history
+        hist_group = QGroupBox("Shortened Links")
+        h_layout = QVBoxLayout()
+        self.shortened_history = QListWidget()
+        h_btns = QHBoxLayout()
+        self.btn_hist_edit = QPushButton("Edit")
+        self.btn_hist_delete = QPushButton("Delete")
+        self.btn_hist_refresh = QPushButton("Refresh")
+        h_btns.addWidget(self.btn_hist_edit)
+        h_btns.addWidget(self.btn_hist_delete)
+        h_btns.addWidget(self.btn_hist_refresh)
+        h_btns.addStretch(1)
+        h_layout.addWidget(self.shortened_history)
+        h_layout.addLayout(h_btns)
+        hist_group.setLayout(h_layout)
+        s_outer.addWidget(hist_group)
+
+    def _wire_events(self):
+        self.source_youtube.toggled.connect(self._on_source_changed)
+        self.source_youtube.toggled.connect(self._save_session)
+        self.source_local.toggled.connect(self._save_session)
+        self.btn_browse.clicked.connect(self._browse_video)
+        self.btn_get_info.clicked.connect(self._get_video_info)
+        self.btn_add_apk.clicked.connect(self._add_apk_link)
+        self.btn_remove_apk.clicked.connect(self._remove_selected_apk)
+        self.btn_clear_apk.clicked.connect(self.apk_list.clear)
+        self.btn_start.clicked.connect(self._start_process)
+        self.btn_stop.clicked.connect(self._stop_process)
+        self.btn_clear_log.clicked.connect(self.log_text.clear)
+        self.youtube_url_edit.textChanged.connect(self._save_session)
+        self.local_video_edit.textChanged.connect(self._save_session)
+        self.title_edit.textChanged.connect(self._save_session)
+        self.skip_download_cb.stateChanged.connect(self._save_session)
+        self.skip_blog_cb.stateChanged.connect(self._save_session)
+        self.draft_cb.stateChanged.connect(self._save_session)
+        self.btn_add_shortener.clicked.connect(self._add_or_update_shortener)
+        self.btn_remove_shortener.clicked.connect(self._remove_selected_shortener)
+        self.shortener_list.itemSelectionChanged.connect(self._on_shortener_list_selected)
+        self.btn_shortener_edit.clicked.connect(self._on_shortener_edit)
+        self.btn_shortener_delete.clicked.connect(self._on_shortener_delete)
+        self.shortener_combo.currentIndexChanged.connect(self._save_session)
+        self.btn_hist_refresh.clicked.connect(self._refresh_shortened_history)
+        self.btn_hist_edit.clicked.connect(self._edit_shortened_item)
+        self.btn_hist_delete.clicked.connect(self._remove_shortened_item)
+
+    def _validate_config(self):
+        try:
+            validate_config()
+            self._log("INFO", "Configuration validated successfully")
+        except ValueError as e:
+            self._log("ERROR", f"Configuration error: {str(e)}")
+            QMessageBox.critical(self, "Configuration Error", f"{str(e)}\n\nPlease check your .env file.")
+
+    def _on_source_changed(self):
+        is_yt = self.source_youtube.isChecked()
+        self.youtube_url_edit.setEnabled(is_yt)
+        self.btn_get_info.setEnabled(is_yt)
+        self.local_video_edit.setEnabled(not is_yt)
+        self.btn_browse.setEnabled(not is_yt)
+
+    def _browse_video(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select Video File", "", "Video Files (*.mp4 *.avi *.mov *.mkv *.wmv *.flv *.webm)")
+        if path:
+            self.local_video_edit.setText(path)
+            if not self.title_edit.text().strip():
+                name = Path(path).stem.replace("_", " ").replace("-", " ")
+                self.title_edit.setText(name.title())
+
+    def _get_video_info(self):
+        url = self.youtube_url_edit.text().strip()
+        if not url:
+            QMessageBox.warning(self, "Warning", "Please enter a YouTube URL first")
+            return
+        try:
+            self.status_label.setText("Fetching video info...")
+            downloader = YouTubeDownloader()
+            info = downloader.get_video_info(url)
+            suggested_title = info.get('title', '')
+            if suggested_title:
+                self.title_edit.setText(suggested_title)
+                self._log("INFO", f"Auto-filled blog title: {suggested_title}")
+            self._log("INFO", f"Video found: {info.get('title', 'Unknown')}")
+            self.status_label.setText("Video info fetched successfully")
+        except Exception as e:
+            self._log("ERROR", f"Error fetching video info: {str(e)}")
+            self.status_label.setText("Error fetching video info")
+
+    def _add_apk_link(self):
+        dlg = APKLinkDialog(self)
+        if dlg.exec_() == QDialog.Accepted:
+            name, url = dlg.get_result()
+            if not name or not url:
+                QMessageBox.warning(self, "Warning", "Please fill in both fields")
+                return
+            short = self._shorten_now(url)
+            if short and short != url:
+                item_text = f"{name}: {short}"
+                tooltip = f"Original: {url}"
+                self._log("STEP", f"Shortened ✓ <a href='{short}' style='color:#8ecae6;'>{short}</a>")
+                self._show_toast(f"Shortened ✓ {short}")
+            else:
+                item_text = f"{name}: {url}"
+                tooltip = ""
+                self._log("WARNING", "Shorten failed, using original URL")
+                self._show_toast("Shorten failed, using original")
+            item = QListWidgetItem(item_text)
+            if tooltip:
+                item.setToolTip(tooltip)
+            self.apk_list.addItem(item)
+            self.apk_links_data.append({"name": name, "original": url, "short": short or url})
+            self._log("INFO", f"Added APK link: {name}")
+            self._save_session()
+
+    def _remove_selected_apk(self):
+        for item in list(self.apk_list.selectedItems()):
+            row = self.apk_list.row(item)
+            self.apk_list.takeItem(row)
+            if 0 <= row < len(self.apk_links_data):
+                del self.apk_links_data[row]
+        self._save_session()
+        self._refresh_shortened_history()
+
+    def _collect_apk_links(self) -> List[Tuple[str, str]]:
+        if self.apk_links_data:
+            return [(d["name"], d.get("short") or d.get("original")) for d in self.apk_links_data]
+        # fallback if loaded older session format
+        links: List[Tuple[str, str]] = []
+        for i in range(self.apk_list.count()):
+            text = self.apk_list.item(i).text()
+            if ":" in text:
+                name, url = text.split(":", 1)
+                links.append((name.strip(), url.strip()))
+        return links
+
+    def _add_or_update_shortener(self):
+        name = self.s_name.text().strip()
+        template = self.s_template.text().strip()
+        headers_text = self.s_headers.toPlainText()
+        keys = [k.strip() for k in self.s_keys.text().split(',') if k.strip()]
+        if not name or not template:
+            QMessageBox.warning(self, "Warning", "Please provide Name and Template URL")
+            return
+        # update existing
+        existing = next((s for s in self.shorteners if s['name'] == name), None)
+        data = {"name": name, "template": template, "headers_text": headers_text, "keys": keys}
+        if existing:
+            existing.update(data)
+        else:
+            self.shorteners.append(data)
+            self.shortener_combo.addItem(name)
+            self.shortener_list.addItem(name)
+        self._save_session()
+        self._show_toast("Shortener saved")
+
+    def _remove_selected_shortener(self):
+        idx = self.shortener_combo.currentIndex()
+        if idx < 0:
+            return
+        name = self.shortener_combo.currentText()
+        self.shortener_combo.removeItem(idx)
+        self.shorteners = [s for s in self.shorteners if s['name'] != name]
+        # remove from list widget
+        for i in range(self.shortener_list.count()):
+            if self.shortener_list.item(i).text() == name:
+                self.shortener_list.takeItem(i)
+                break
+        self._save_session()
+        self._show_toast("Shortener removed")
+
+    def _shorten_now(self, url: str) -> str:
+        cfg = None
+        idx = self.shortener_combo.currentIndex()
+        if idx >= 0 and idx < len(self.shorteners):
+            cfg = self.shorteners[idx]
+        if not cfg:
+            return url
+        try:
+            from services.shortener import URLShortener
+            shortener = URLShortener()
+            return shortener.shorten_with_template(
+                url=url,
+                template=cfg.get('template', ''),
+                headers_text=cfg.get('headers_text') or '',
+                keys=cfg.get('keys') or []
+            )
+        except Exception as e:
+            self._log('ERROR', f'Shorten failed: {e}')
+            return url
+
+    def _start_process(self):
+        # Validate
+        is_yt = self.source_youtube.isChecked()
+        if is_yt:
+            if not self.youtube_url_edit.text().strip():
+                QMessageBox.critical(self, "Error", "Please enter a YouTube URL")
+                return
+        else:
+            p = self.local_video_edit.text().strip()
+            if not p:
+                QMessageBox.critical(self, "Error", "Please select a video file")
+                return
+            if not Path(p).exists():
+                QMessageBox.critical(self, "Error", "Selected video file does not exist")
+                return
+        if not self.title_edit.text().strip():
+            QMessageBox.critical(self, "Error", "Please enter a blog title")
+            return
+
+        self.btn_start.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+        self.progress.setValue(0)
+        self.status_label.setText("Starting...")
+
+        self.worker = WorkerThread(
+            video_source="youtube" if is_yt else "local",
+            youtube_url=self.youtube_url_edit.text().strip(),
+            local_path=self.local_video_edit.text().strip(),
+            title=self.title_edit.text().strip(),
+            apk_links=self._collect_apk_links(),
+            skip_download=self.skip_download_cb.isChecked(),
+            skip_blog=self.skip_blog_cb.isChecked(),
+            draft_mode=self.draft_cb.isChecked()
+        )
+        self.worker.log.connect(lambda m: self._log("INFO" if m.startswith("[INFO]") else "LOG", m))
+        self.worker.progress.connect(self._on_progress)
+        self.worker.completed.connect(self._on_completed)
+        self.worker.step_done.connect(self._show_toast)
+        self.worker.start()
+
+    def _stop_process(self):
+        if self.worker and self.worker.isRunning():
+            self.worker.terminate()
+        self.btn_start.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.status_label.setText("Process stopped by user")
+        self._log("WARNING", "Process stopped by user")
+
+    def _on_progress(self, value: int, status: str):
+        self.progress.setValue(max(0, min(100, value)))
+        self.status_label.setText(status)
+
+    def _on_completed(self, success: bool, message: str):
+        self.btn_start.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        if success:
+            self.status_label.setText("Process completed successfully!")
+            self._log("STEP", "All tasks completed successfully!")
+            QMessageBox.information(self, "Success", "Content distribution completed successfully!")
+        else:
+            self.status_label.setText("Error")
+            self._log("ERROR", message)
+            QMessageBox.critical(self, "Error", f"An error occurred: {message}")
+        self._save_session()
+        self._refresh_shortened_history()
+
+    def _log(self, level: str, message: str):
+        color = "#c8c8c8"
+        if level == "ERROR":
+            color = "#ff6b6b"
+        elif level == "WARNING":
+            color = "#ffd166"
+        elif level == "INFO":
+            color = "#8ecae6"
+        elif level == "STEP":
+            color = "#80ed99"
+        if level == "STEP":
+            html = f"<div style='margin:4px 0;'><span style='color:{color};'>●</span> <b>{message}</b></div>"
+        else:
+            html = f"<div style='margin:2px 0;color:{color};'>{message}</div>"
+        self.log_text.append(html)
+
+    def _show_toast(self, message: str):
+        toast = Toast(self, message)
+        toast.show_for(2000)
+
+    def _refresh_shortener_list(self):
+        self.shortener_list.clear()
+        for s in self.shorteners:
+            self.shortener_list.addItem(s.get('name', ''))
+
+    def _on_shortener_list_selected(self):
+        items = self.shortener_list.selectedItems()
+        if not items:
+            return
+        name = items[0].text()
+        s = next((x for x in self.shorteners if x['name'] == name), None)
+        if not s:
+            return
+        self.s_name.setText(s.get('name', ''))
+        self.s_template.setText(s.get('template', ''))
+        self.s_headers.setText(s.get('headers_text', ''))
+        self.s_keys.setText(','.join(s.get('keys', [])))
+
+    def _on_shortener_edit(self):
+        # Same as selecting and editing fields then Add/Update
+        self._on_shortener_list_selected()
+        self._show_toast("Edit fields then click Add/Update")
+
+    def _on_shortener_delete(self):
+        items = self.shortener_list.selectedItems()
+        if not items:
+            return
+        name = items[0].text()
+        # remove from combo
+        idx = self.shortener_combo.findText(name)
+        if idx >= 0:
+            self.shortener_combo.removeItem(idx)
+        # remove from storage and list
+        self.shorteners = [s for s in self.shorteners if s['name'] != name]
+        self._refresh_shortener_list()
+        self._save_session()
+        self._show_toast("Shortener removed")
+
+    def _refresh_shortened_history(self):
+        self.shortened_history.clear()
+        for d in self.apk_links_data:
+            name = d.get('name', '')
+            original = d.get('original', '')
+            short = d.get('short') or original
+            item = QListWidgetItem(f"{name}: {short}")
+            if original and short != original:
+                item.setToolTip(f"Original: {original}")
+            self.shortened_history.addItem(item)
+
+    def _edit_shortened_item(self):
+        items = self.shortened_history.selectedItems()
+        if not items:
+            return
+        row = self.shortened_history.row(items[0])
+        if row < 0 or row >= len(self.apk_links_data):
+            return
+        cur = self.apk_links_data[row]
+        dlg = APKLinkDialog(self)
+        dlg.name_edit.setText(cur.get('name', ''))
+        dlg.url_edit.setText(cur.get('original', ''))
+        if dlg.exec_() == QDialog.Accepted:
+            name, url = dlg.get_result()
+            if not name or not url:
+                return
+            short = self._shorten_now(url)
+            self.apk_links_data[row] = {"name": name, "original": url, "short": short or url}
+            # Update content tab list accordingly
+            if row < self.apk_list.count():
+                self.apk_list.item(row).setText(f"{name}: {short or url}")
+                tooltip = f"Original: {url}" if short and short != url else ""
+                self.apk_list.item(row).setToolTip(tooltip)
+            if short and short != url:
+                self._log("STEP", f"Shortened ✓ <a href='{short}' style='color:#8ecae6;'>{short}</a>")
+                self._show_toast(f"Shortened ✓ {short}")
+            else:
+                self._log("WARNING", "Shorten failed, using original URL")
+                self._show_toast("Shorten failed, using original")
+            self._refresh_shortened_history()
+            self._save_session()
+
+    def _remove_shortened_item(self):
+        items = list(self.shortened_history.selectedItems())
+        for it in items:
+            row = self.shortened_history.row(it)
+            self.shortened_history.takeItem(row)
+            if 0 <= row < len(self.apk_links_data):
+                del self.apk_links_data[row]
+                if row < self.apk_list.count():
+                    self.apk_list.takeItem(row)
+        self._save_session()
+
+    def _save_session(self):
+        try:
+            data = {
+                "source": "youtube" if self.source_youtube.isChecked() else "local",
+                "youtube_url": self.youtube_url_edit.text().strip(),
+                "local_path": self.local_video_edit.text().strip(),
+                "title": self.title_edit.text().strip(),
+                "apk_links": [(d.get("name"), d.get("original")) for d in self.apk_links_data] if self.apk_links_data else self._collect_apk_links(),
+                "skip_download": self.skip_download_cb.isChecked(),
+                "skip_blog": self.skip_blog_cb.isChecked(),
+                "draft": self.draft_cb.isChecked(),
+                "shorteners": self.shorteners,
+                "selected_shortener": self.shortener_combo.currentText() if self.shortener_combo.currentIndex() >= 0 else ""
+            }
+            self.session_path.write_text(__import__("json").dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _load_session(self):
+        try:
+            if not self.session_path.exists():
+                return
+            data = __import__("json").loads(self.session_path.read_text(encoding="utf-8"))
+            if data.get("source") == "youtube":
+                self.source_youtube.setChecked(True)
+            else:
+                self.source_local.setChecked(True)
+            self.youtube_url_edit.setText(data.get("youtube_url", ""))
+            self.local_video_edit.setText(data.get("local_path", ""))
+            self.title_edit.setText(data.get("title", ""))
+            self.apk_list.clear()
+            self.apk_links_data = []
+            for name, url in data.get("apk_links", []):
+                item = QListWidgetItem(f"{name}: {url}")
+                self.apk_list.addItem(item)
+                self.apk_links_data.append({"name": name, "original": url, "short": url})
+            self.skip_download_cb.setChecked(bool(data.get("skip_download", False)))
+            self.skip_blog_cb.setChecked(bool(data.get("skip_blog", False)))
+            self.draft_cb.setChecked(bool(data.get("draft", False)))
+            # load shorteners
+            self.shorteners = data.get("shorteners", []) or []
+            self.shortener_combo.clear()
+            self.shortener_list.clear()
+            for s in self.shorteners:
+                name = s.get('name', '')
+                self.shortener_combo.addItem(name)
+                self.shortener_list.addItem(name)
+            sel = data.get("selected_shortener", "")
+            if sel:
+                idx = self.shortener_combo.findText(sel)
+                if idx >= 0:
+                    self.shortener_combo.setCurrentIndex(idx)
+            self._refresh_shortened_history()
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        self._save_session()
+        super().closeEvent(event)
+
+    def _apply_dark_theme(self):
+        app = QApplication.instance()
+        if not app:
+            return
+        app.setStyle("Fusion")
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor(45, 45, 45))
+        palette.setColor(QPalette.WindowText, Qt.white)
+        palette.setColor(QPalette.Base, QColor(35, 35, 35))
+        palette.setColor(QPalette.AlternateBase, QColor(45, 45, 45))
+        palette.setColor(QPalette.ToolTipBase, Qt.white)
+        palette.setColor(QPalette.ToolTipText, Qt.white)
+        palette.setColor(QPalette.Text, Qt.white)
+        palette.setColor(QPalette.Button, QColor(53, 53, 53))
+        palette.setColor(QPalette.ButtonText, Qt.white)
+        palette.setColor(QPalette.BrightText, Qt.red)
+        palette.setColor(QPalette.Highlight, QColor(64, 128, 255))
+        palette.setColor(QPalette.HighlightedText, Qt.black)
+        app.setPalette(palette)
+        app.setStyleSheet("""
+            QGroupBox { font-weight: bold; border: 1px solid #444; border-radius: 6px; margin-top: 8px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
+            QPushButton { padding: 6px 10px; }
+            QLineEdit, QTextEdit, QListWidget { border: 1px solid #555; border-radius: 4px; }
+        """)
+
+    def _apply_icons(self):
+        style = self.style()
+        self.btn_browse.setIcon(style.standardIcon(QStyle.SP_DirOpenIcon))
+        self.btn_get_info.setIcon(style.standardIcon(QStyle.SP_BrowserReload))
+        self.btn_start.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
+        self.btn_stop.setIcon(style.standardIcon(QStyle.SP_MediaStop))
+        self.btn_clear_log.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
+        self.btn_add_apk.setIcon(style.standardIcon(QStyle.SP_FileDialogNewFolder))
+        self.btn_remove_apk.setIcon(style.standardIcon(QStyle.SP_TrashIcon))
+        self.btn_clear_apk.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
+
+
+class FileDropLineEdit(QLineEdit):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        for url in urls:
+            local = url.toLocalFile()
+            if local:
+                p = Path(local)
+                if p.suffix.lower() in {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm'}:
+                    self.setText(local)
+                    mw = self.window()
+                    if hasattr(mw, 'title_edit') and isinstance(mw.title_edit, QLineEdit):
+                        if not mw.title_edit.text().strip():
+                            name = p.stem.replace('_', ' ').replace('-', ' ')
+                            mw.title_edit.setText(name.title())
+                    break
+        super().dropEvent(event)
+
+
+class Toast(QWidget):
+    def __init__(self, parent: QMainWindow, message: str):
+        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.label = QLabel(message)
+        self.label.setStyleSheet(
+            "background-color: rgba(30,30,30,200); color: white; padding: 10px 14px;"
+            "border-radius: 6px;"
+        )
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.label)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.adjustSize()
+
+        # position bottom-right
+        parent_geom = parent.geometry()
+        x = parent_geom.x() + parent_geom.width() - self.width() - 24
+        y = parent_geom.y() + parent_geom.height() - self.height() - 24
+        self.move(QPoint(x, y))
+
+    def show_for(self, msec: int = 2000):
+        self.show()
+        QTimer.singleShot(msec, self.close)
+
+
+def main():
+    app = QApplication(sys.argv)
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()
+
+

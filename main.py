@@ -17,7 +17,7 @@ from services.youtube import YouTubeDownloader
 from services.shortener import URLShortener
 from services.ai import ContentGenerator
 from services.blogger import BloggerPublisher
-from services.tiktok import TikTokUploader
+ 
 
 # Import utilities
 from utils import sanitize_filename, clean_temp_dir
@@ -162,37 +162,7 @@ def create_blog_post(title, video_info, shortened_links, is_draft=False):
         else:
             sys.exit(1)
 
-def upload_to_tiktok(video_path, title, blog_url):
-    """Upload video to TikTok with blog link"""
-    console.print("[bold blue]Uploading to TikTok...[/bold blue]")
-    
-    try:
-        # Generate caption with AI
-        content_generator = ContentGenerator()
-        caption = content_generator.generate_tiktok_caption(title, blog_url)
-        
-        # Upload to TikTok
-        tiktok = TikTokUploader(headless=False)  # Set to True for headless mode
-        
-        # Login first
-        if not tiktok.login():
-            raise Exception("Failed to log in to TikTok")
-        
-        # Upload the video
-        result = tiktok.upload_video(
-            video_path=video_path,
-            caption=caption,
-            comment=f"Download links: {blog_url}"
-        )
-        
-        # Close the browser
-        tiktok.close()
-        
-        console.print(f"[green]Video uploaded to TikTok successfully:[/green] {result.get('url', 'URL not available')}")
-        return result
-    except Exception as e:
-        console.print(f"[red]Error uploading to TikTok: {str(e)}[/red]")
-        return None
+ 
 
 def main():
     """Main function"""
@@ -239,13 +209,7 @@ def main():
                 is_draft=args.draft
             )
         
-        # Upload to TikTok
-        if not args.skip_tiktok and video_info and blog_post:
-            upload_to_tiktok(
-                video_info['file_path'],
-                input_data['title'],
-                blog_post['url']
-            )
+        # TikTok upload removed
         
         console.print("[bold green]Process completed successfully![/bold green]")
         

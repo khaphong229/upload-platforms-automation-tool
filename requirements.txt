@@ -12,3 +12,4 @@ webdriver-manager>=4.0.1
 rich>=13.7.0
 tiktok-uploader>=1.1.4
 schedule>=1.1.0
+PyQt5>=5.15.0

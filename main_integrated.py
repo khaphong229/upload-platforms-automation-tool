@@ -25,19 +25,12 @@ from services.youtube import YouTubeDownloader
 from services.shortener import URLShortener
 from services.ai import ContentGenerator
 from services.blogger import BloggerPublisher
-from services.tiktok import TikTokUploader, NewTikTokUploader
+ 
 
 # Import utilities
 from utils import sanitize_filename, clean_temp_dir
 
-# Import batch uploader
-try:
-    from batch_uploader.tiktok_uploader.enhanced_uploader import EnhancedTikTokUploader
-    from batch_uploader.batch_gui import Dashboard as BatchDashboard
-except ImportError as e:
-    EnhancedTikTokUploader = None
-    BatchDashboard = None
-    print(f"Warning: Could not import batch uploader components: {e}")
+# Batch uploader removed
 
 
 class LogHandler(logging.Handler):
@@ -72,7 +65,7 @@ class IntegratedContentGUI:
         self.apk_links = []
         self.skip_download = tk.BooleanVar()
         self.skip_blog = tk.BooleanVar()
-        self.skip_tiktok = tk.BooleanVar()
+        
         self.draft_mode = tk.BooleanVar()
         
         # Progress tracking
@@ -80,19 +73,7 @@ class IntegratedContentGUI:
         self.status_var = tk.StringVar(value="Ready")
         self.is_processing = False
         
-        # Batch uploader variables
-        self.batch_upload_running = False
-        self.batch_configs = {}
-        self.selected_tiktok_profiles = []
         
-        # Initialize batch uploader
-        self.batch_uploader = None
-        if EnhancedTikTokUploader:
-            try:
-                self.batch_uploader = EnhancedTikTokUploader()
-                print("Batch uploader initialized successfully")
-            except Exception as e:
-                print(f"Warning: Could not initialize batch uploader: {e}")
         
         # Logging setup
         self.log_queue = queue.Queue()
@@ -141,8 +122,6 @@ class IntegratedContentGUI:
         
         # Create tabs
         self.create_content_distribution_tab()
-        self.create_tiktok_profiles_tab()
-        self.create_standalone_batch_tab()
     
     def create_content_distribution_tab(self):
         """Create the enhanced content distribution tab"""
@@ -241,39 +220,7 @@ class IntegratedContentGUI:
         ttk.Button(apk_btn_frame, text="Remove Selected", command=self.remove_apk_link).grid(row=0, column=1, padx=(0, 5))
         ttk.Button(apk_btn_frame, text="Clear All", command=self.clear_apk_links).grid(row=0, column=2)
         
-        # TikTok Profile Selection Section
-        tiktok_frame = ttk.LabelFrame(tab, text="TikTok Upload Settings", padding="10")
-        tiktok_frame.pack(fill='x', pady=10)
-        tiktok_frame.columnconfigure(1, weight=1)
-        
-        ttk.Label(tiktok_frame, text="Select TikTok profiles for upload:", font=('Arial', 10, 'bold')).grid(
-            row=0, column=0, columnspan=2, sticky=tk.W, pady=5)
-        
-        # Profile selection listbox
-        profile_list_frame = ttk.Frame(tiktok_frame)
-        profile_list_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        profile_list_frame.columnconfigure(0, weight=1)
-        
-        self.tiktok_profiles_listbox = tk.Listbox(profile_list_frame, height=4, selectmode='multiple')
-        self.tiktok_profiles_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        
-        tiktok_scrollbar = ttk.Scrollbar(profile_list_frame, orient=tk.VERTICAL, command=self.tiktok_profiles_listbox.yview)
-        tiktok_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        self.tiktok_profiles_listbox.configure(yscrollcommand=tiktok_scrollbar.set)
-        
-        # Profile management buttons
-        profile_btn_frame = ttk.Frame(tiktok_frame)
-        profile_btn_frame.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
-        
-        ttk.Button(profile_btn_frame, text="Refresh Profiles", command=self.refresh_tiktok_profiles).grid(row=0, column=0, padx=(0, 5))
-        ttk.Button(profile_btn_frame, text="Manage Profiles", command=self.switch_to_profiles_tab).grid(row=0, column=1, padx=(0, 5))
-        
-        # Upload method selection
-        self.upload_method = tk.StringVar(value="single")
-        ttk.Radiobutton(tiktok_frame, text="Single Profile Upload (original method)", 
-                       variable=self.upload_method, value="single").grid(row=3, column=0, sticky=tk.W, pady=2)
-        ttk.Radiobutton(tiktok_frame, text="Multi-Profile Upload (selected profiles)", 
-                       variable=self.upload_method, value="multi").grid(row=4, column=0, sticky=tk.W, pady=2)
+        # TikTok upload UI removed
         
         # Options section
         options_frame = ttk.LabelFrame(tab, text="Processing Options", padding="10")
@@ -281,7 +228,6 @@ class IntegratedContentGUI:
         
         ttk.Checkbutton(options_frame, text="Skip Download", variable=self.skip_download).grid(row=0, column=0, sticky=tk.W)
         ttk.Checkbutton(options_frame, text="Skip Blog Creation", variable=self.skip_blog).grid(row=0, column=1, sticky=tk.W, padx=(20, 0))
-        ttk.Checkbutton(options_frame, text="Skip TikTok Upload", variable=self.skip_tiktok).grid(row=1, column=0, sticky=tk.W)
         ttk.Checkbutton(options_frame, text="Save as Draft", variable=self.draft_mode).grid(row=1, column=1, sticky=tk.W, padx=(20, 0))
         
         # Progress section
@@ -320,7 +266,7 @@ class IntegratedContentGUI:
         
         # Initialize UI state
         self.on_source_change()
-        self.refresh_tiktok_profiles()
+        # TikTok profiles refresh removed
     
     def create_tiktok_profiles_tab(self):
         """Create TikTok profiles management tab"""
@@ -566,7 +512,7 @@ class IntegratedContentGUI:
             # Clean old temporary files
             clean_temp_dir(older_than_days=1)
             
-            total_steps = 4  # Download, Shorten, Blog, TikTok
+            total_steps = 3  # Download, Shorten, Blog
             current_step = 0
             
             # Step 1: Get video (download or use local)
@@ -594,13 +540,7 @@ class IntegratedContentGUI:
                 self.update_progress(current_step, total_steps, "Creating blog post...")
                 blog_post = self.create_blog_post(video_info, shortened_links)
             
-            # Step 4: Upload to TikTok (enhanced with multi-profile support)
-            if not self.skip_tiktok.get() and video_info and self.is_processing:
-                current_step += 1
-                self.update_progress(current_step, total_steps, "Uploading to TikTok...")
-                tiktok_result = self.upload_to_tiktok_enhanced(video_info, blog_post)
-                if not tiktok_result:
-                    raise Exception("TikTok upload failed - check logs for details")
+            # TikTok upload removed
             
             if self.is_processing:
                 self.update_progress(100, 100, "Process completed successfully!")
@@ -1482,14 +1422,7 @@ class SettingsDialog:
         ttk.Label(dir_frame, text="Temp Directory:").grid(row=1, column=0, sticky=tk.W, pady=5)
         ttk.Label(dir_frame, text=str(TEMP_DIR)).grid(row=1, column=1, sticky=tk.W, pady=5)
         
-        # TikTok tab
-        tiktok_frame = ttk.Frame(notebook, padding="10")
-        notebook.add(tiktok_frame, text="TikTok")
-
-        self.tiktok_session_id = tk.StringVar()
-
-        ttk.Label(tiktok_frame, text="TikTok sessionid:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(tiktok_frame, textvariable=self.tiktok_session_id, width=60).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5)
+        # TikTok settings removed
 
         # Configuration tab
         config_frame = ttk.Frame(notebook, padding="10")
@@ -1510,23 +1443,15 @@ class SettingsDialog:
         ttk.Button(btn_frame, text="Save", command=self.save_settings).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Close", command=self.dialog.destroy).pack(side=tk.LEFT, padx=5)
 
-        self.load_settings()
+        
     
     def load_settings(self):
         """Load settings from .env file"""
-        try:
-            from dotenv import get_key
-            session_id = get_key('.env', 'TIKTOK_SESSION_ID')
-            if session_id:
-                self.tiktok_session_id.set(session_id)
-        except:
-            pass
+        pass
 
     def save_settings(self):
         """Save settings to .env file"""
         try:
-            from dotenv import set_key
-            set_key('.env', 'TIKTOK_SESSION_ID', self.tiktok_session_id.get())
             messagebox.showinfo("Settings Saved", "Settings have been saved successfully.")
             self.dialog.destroy()
         except Exception as e:

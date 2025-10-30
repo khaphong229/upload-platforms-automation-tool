@@ -1,0 +1,25 @@
+{
+  "source": "local",
+  "youtube_url": "",
+  "local_path": "",
+  "title": "",
+  "apk_links": [
+    [
+      "z ai",
+      "https://chat.z.ai/c/a92e2ed2-d4fd-4c51-99b9-b62c2f29d180"
+    ],
+    [
+      "claude",
+      "https://claude.ai/new"
+    ],
+    [
+      "claude",
+      "https://claude.ai/new"
+    ]
+  ],
+  "skip_download": false,
+  "skip_blog": false,
+  "draft": false,
+  "shorteners": [],
+  "selected_shortener": ""
+}
