@@ -1,147 +1,39 @@
 import logging
-import pyshorteners
 import requests
-from typing import Dict, List, Optional, Tuple, Any
-from config import SHORTENER_API_KEY
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 class URLShortener:
-    """Service to shorten URLs using various URL shortening services"""
-    
-    def __init__(self, api_key=None):
-        self.api_key = api_key or SHORTENER_API_KEY
-        self.shortener = pyshorteners.Shortener()
-    
-    def shorten_url(self, url, service='tinyurl'):
-        """
-        Shorten a URL using the specified service
-        
-        Args:
-            url (str): The URL to shorten
-            service (str): The shortening service to use (tinyurl, bitly, etc.)
-            
-        Returns:
-            str: The shortened URL
-        """
-        logger.info(f"Shortening URL: {url} using {service}")
-        
-        try:
-            if service == 'tinyurl':
-                short_url = self.shortener.tinyurl.short(url)
-            elif service == 'bitly':
-                if not self.api_key:
-                    raise ValueError("Bitly API key is required")
-                bitly_shortener = pyshorteners.Shortener(api_key=self.api_key)
-                short_url = bitly_shortener.bitly.short(url)
-            elif service == 'chilpit':
-                short_url = self.shortener.chilpit.short(url)
-            elif service == 'clckru':
-                short_url = self.shortener.clckru.short(url)
-            elif service == 'dagd':
-                short_url = self.shortener.dagd.short(url)
-            elif service == 'isgd':
-                short_url = self.shortener.isgd.short(url)
-            elif service == 'osdb':
-                short_url = self.shortener.osdb.short(url)
-            else:
-                # Default to TinyURL if service not recognized
-                short_url = self.shortener.tinyurl.short(url)
-            
-            logger.info(f"URL shortened: {short_url}")
-            return short_url
-            
-        except Exception as e:
-            logger.error(f"Error shortening URL: {str(e)}")
-            # Fallback to TinyURL if the specified service fails
-            if service != 'tinyurl':
-                logger.info(f"Falling back to TinyURL")
-                return self.shorten_url(url, 'tinyurl')
-            raise
-    
-    def shorten_multiple(self, urls, service='tinyurl'):
-        """
-        Shorten multiple URLs using the specified service
-        
-        Args:
-            urls (list): List of URLs to shorten
-            service (str): The shortening service to use
-            
-        Returns:
-            dict: Dictionary mapping original URLs to shortened URLs
-        """
-        logger.info(f"Shortening {len(urls)} URLs using {service}")
-        
-        result = {}
-        for url in urls:
-            try:
-                result[url] = self.shorten_url(url, service)
-            except Exception as e:
-                logger.error(f"Error shortening URL {url}: {str(e)}")
-                result[url] = url  # Use original URL if shortening fails
-        
-        return result 
+    """
+    Simple URL shortener for APIs like link4m.co.
+    Usage:
+        shortener = URLShortener()
+        short_url = shortener.shorten_url(
+            base_url="https://link4m.co/api-shorten/v2?api=YOUR_API_KEY&url=",
+            apk_url="https://your-apk-link.com"
+        )
+    """
 
-    # --- Custom template-based shortener support ---
-    def shorten_with_template(self, url: str, template: str, headers_text: str = '', keys: Optional[List[str]] = None) -> str:
+    def shorten_url(self, base_url: str, apk_url: str) -> str:
         """
-        Shorten a URL using a custom HTTP endpoint template.
+        Shorten an APK URL using the provided base API endpoint.
 
         Args:
-            url: Original URL
-            template: Template URL containing {url}
-            headers_text: lines of "Key: Value"
-            keys: preferred JSON keys to pick the shortened URL from
+            base_url: The API endpoint up to 'url=' (e.g. 'https://link4m.co/api-shorten/v2?api=KEY&url=')
+            apk_url: The APK link to be shortened
 
         Returns:
-            Shortened URL if extracted; otherwise returns original url
+            The shortened URL if successful, otherwise returns the original apk_url
         """
         try:
-            final_url = template.replace('{url}', requests.utils.quote(url, safe=''))
-            headers: Dict[str, str] = {}
-            for line in (headers_text or '').splitlines():
-                if ':' in line:
-                    k, v = line.split(':', 1)
-                    headers[k.strip()] = v.strip()
-
-            resp = requests.get(final_url, headers=headers, timeout=20)
-            text = resp.text.strip()
-
-            # Try JSON parse
-            short = None
-            try:
-                data = resp.json()
-                short = self._extract_url_from_json(data, keys)
-            except Exception:
-                pass
-
-            if not short:
-                if text.startswith('http'):
-                    short = text
-
-            return short or url
-        except Exception as e:
-            logger.error(f"Template shortener failed: {e}")
-            return url
-
-    def _extract_url_from_json(self, data: Any, keys: Optional[List[str]] = None) -> Optional[str]:
-        preferred = keys or []
-        common = ['shortenedUrl', 'short_url', 'shortUrl', 'result_url', 'url', 'link']
-        if isinstance(data, dict):
-            for k in list(preferred) + common:
-                v = data.get(k)
-                if isinstance(v, str) and v.startswith('http'):
-                    return v
-        # recursive search
-        stack = [data]
-        while stack:
-            cur = stack.pop()
-            if isinstance(cur, dict):
-                for v in cur.values():
-                    if isinstance(v, str) and v.startswith('http'):
-                        return v
-                    elif isinstance(v, (dict, list)):
-                        stack.append(v)
-            elif isinstance(cur, list):
-                stack.extend(cur)
-        return None
+            full_url = f"{base_url}{apk_url}"
+            resp = requests.get(full_url, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+            short = data.get('shortenedUrl')
+            if short and short.startswith('http'):
+                return short
+            return apk_url
+        except Exception:
+            return apk_url

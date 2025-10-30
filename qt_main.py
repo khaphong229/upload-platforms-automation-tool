@@ -507,6 +507,7 @@ class MainWindow(QMainWindow):
         self._show_toast("Shortener removed")
 
     def _shorten_now(self, url: str) -> str:
+        # Use the selected shortener's base_url as the API endpoint
         cfg = None
         idx = self.shortener_combo.currentIndex()
         if idx >= 0 and idx < len(self.shorteners):
@@ -516,12 +517,8 @@ class MainWindow(QMainWindow):
         try:
             from services.shortener import URLShortener
             shortener = URLShortener()
-            return shortener.shorten_with_template(
-                url=url,
-                template=cfg.get('template', ''),
-                headers_text=cfg.get('headers_text') or '',
-                keys=cfg.get('keys') or []
-            )
+            base_url = cfg.get('template', '')  # template now is just the API endpoint up to 'url='
+            return shortener.shorten_url(base_url, url)
         except Exception as e:
             self._log('ERROR', f'Shorten failed: {e}')
             return url

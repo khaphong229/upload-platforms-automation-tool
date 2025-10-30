@@ -15,11 +15,24 @@
     [
       "claude",
       "https://claude.ai/new"
+    ],
+    [
+      "codeptit",
+      "https://code.ptit.edu.vn/student/question/DSA07008"
     ]
   ],
   "skip_download": false,
   "skip_blog": false,
   "draft": false,
-  "shorteners": [],
-  "selected_shortener": ""
+  "shorteners": [
+    {
+      "name": "link4m",
+      "template": "https://link4m.co/api-shorten/v2?api=63a469a81f362c35c12f2d80&url=",
+      "headers_text": "",
+      "keys": [
+        "shortenedUrl"
+      ]
+    }
+  ],
+  "selected_shortener": "link4m"
 }
