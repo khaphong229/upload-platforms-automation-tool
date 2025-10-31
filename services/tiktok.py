@@ -1,80 +1,113 @@
 """
 TikTok Upload Service
-Wrapper around TikTokAutoUploader functionality
+Wrapper around TikTokAutoUploader functionality with lazy loading
 """
 import sys
 import os
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 import logging
-
-# Add TikTokAutoUploader to path - try multiple possible locations
-TIKTOK_UPLOADER_PATH = None
-possible_paths = [
-    Path(__file__).parent.parent.parent / "TiktokAutoUploader",  # E:\Workspace\Tool\TiktokAutoUploader
-    Path(r"E:\Workspace\Tool\TiktokAutoUploader"),  # Absolute path
-]
-
-for path in possible_paths:
-    if path.exists() and (path / "tiktok_uploader").exists():
-        TIKTOK_UPLOADER_PATH = path
-        # Add to Python path if not already there
-        str_path = str(TIKTOK_UPLOADER_PATH)
-        if str_path not in sys.path:
-            sys.path.insert(0, str_path)
-        break
 
 logger = logging.getLogger(__name__)
 
 
 class TikTokService:
-    """Service for managing TikTok uploads"""
+    """Service for managing TikTok uploads with lazy loading"""
 
     def __init__(self):
-        """Initialize TikTok service"""
-        self.tiktok_available = self._check_availability()
-        if self.tiktok_available:
-            self._initialize_tiktok()
+        """Initialize TikTok service (lazy loading - no imports yet)"""
+        self._uploader_path = None
+        self._modules_loaded = False
+        self._availability_checked = False
+        self._tiktok_available = False
+
+        # These will be populated on first use
+        self.upload_video = None
+        self.login = None
+        self.Config = None
+        self.load_cookies = None
+        self.config = None
+
+    def _find_uploader_path(self) -> Optional[Path]:
+        """Find TikTokAutoUploader path"""
+        if self._uploader_path is not None:
+            return self._uploader_path
+
+        possible_paths = [
+            Path(__file__).parent.parent.parent / "TiktokAutoUploader",
+            Path(r"E:\Workspace\Tool\TiktokAutoUploader"),
+        ]
+
+        for path in possible_paths:
+            if path.exists() and (path / "tiktok_uploader").exists():
+                self._uploader_path = path
+                # Add to Python path if not already there
+                str_path = str(self._uploader_path)
+                if str_path not in sys.path:
+                    sys.path.insert(0, str_path)
+                logger.info(f"Found TikTokAutoUploader at: {path}")
+                return self._uploader_path
+
+        logger.warning("TikTokAutoUploader path not found")
+        return None
 
     def _check_availability(self) -> bool:
-        """Check if TikTok uploader is available"""
-        try:
-            # Check if path was found
-            if TIKTOK_UPLOADER_PATH is None:
-                logger.warning("TikTok uploader path not found in any expected location")
-                return False
+        """Check if TikTok uploader is available (lazy check)"""
+        if self._availability_checked:
+            return self._tiktok_available
 
-            if not TIKTOK_UPLOADER_PATH.exists():
-                logger.warning(f"TikTok uploader not found at: {TIKTOK_UPLOADER_PATH}")
+        self._availability_checked = True
+
+        try:
+            # Find path first
+            uploader_path = self._find_uploader_path()
+            if uploader_path is None:
+                logger.warning("TikTok uploader path not found in any expected location")
+                self._tiktok_available = False
                 return False
 
             # Check if tiktok_uploader package exists
-            tiktok_pkg = TIKTOK_UPLOADER_PATH / "tiktok_uploader"
+            tiktok_pkg = uploader_path / "tiktok_uploader"
             if not tiktok_pkg.exists():
-                logger.warning(f"tiktok_uploader package not found in: {TIKTOK_UPLOADER_PATH}")
+                logger.warning(f"tiktok_uploader package not found in: {uploader_path}")
+                self._tiktok_available = False
                 return False
 
-            # Try importing core modules only (not Video which needs moviepy)
-            import tiktok_uploader.tiktok
-            import tiktok_uploader.Config
-            import tiktok_uploader.cookies
+            # Try a minimal import test to verify it can be imported
+            # Don't actually import yet - just check if the files exist
+            required_files = [
+                tiktok_pkg / "tiktok.py",
+                tiktok_pkg / "Config.py",
+                tiktok_pkg / "cookies.py",
+            ]
 
-            logger.info("TikTok uploader modules loaded successfully")
+            for file in required_files:
+                if not file.exists():
+                    logger.warning(f"Required file missing: {file}")
+                    self._tiktok_available = False
+                    return False
+
+            logger.info("TikTok uploader appears to be available (lazy check)")
+            self._tiktok_available = True
             return True
-        except ImportError as e:
-            logger.error(f"Failed to import TikTok uploader: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return False
+
         except Exception as e:
-            logger.error(f"Unexpected error checking TikTok availability: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"Error checking TikTok availability: {e}")
+            self._tiktok_available = False
             return False
 
-    def _initialize_tiktok(self):
-        """Initialize TikTok modules"""
+    def _ensure_modules_loaded(self) -> bool:
+        """Ensure TikTok modules are loaded (lazy loading)"""
+        if self._modules_loaded:
+            return True
+
+        if not self._check_availability():
+            return False
+
         try:
+            logger.info("Loading TikTok modules (lazy loading)...")
+
+            # NOW we actually import (only when needed)
             from tiktok_uploader.tiktok import upload_video, login
             from tiktok_uploader.Config import Config
             from tiktok_uploader.cookies import load_cookies_from_file
@@ -84,11 +117,8 @@ class TikTokService:
             self.Config = Config
             self.load_cookies = load_cookies_from_file
 
-            # Note: We skip importing Video class as it requires moviepy which may have dependency issues
-            # Users will provide pre-processed video files directly
-
             # Load config
-            config_path = TIKTOK_UPLOADER_PATH / "config.txt"
+            config_path = self._uploader_path / "config.txt"
             if config_path.exists():
                 self.Config.load(str(config_path))
                 self.config = self.Config.get()
@@ -96,17 +126,30 @@ class TikTokService:
                 logger.warning("config.txt not found, using defaults")
                 self.config = None
 
+            self._modules_loaded = True
+            logger.info("TikTok modules loaded successfully!")
+            return True
+
+        except ImportError as e:
+            logger.error(f"Failed to import TikTok modules: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            self._tiktok_available = False
+            return False
         except Exception as e:
             logger.error(f"Failed to initialize TikTok modules: {e}")
-            self.tiktok_available = False
+            import traceback
+            logger.error(traceback.format_exc())
+            self._tiktok_available = False
+            return False
 
     def is_available(self) -> bool:
         """Check if TikTok service is available"""
-        return self.tiktok_available
+        return self._check_availability()
 
     def get_saved_accounts(self) -> List[str]:
         """Get list of saved TikTok accounts"""
-        if not self.tiktok_available:
+        if not self.is_available():
             return []
 
         try:
@@ -136,8 +179,9 @@ class TikTokService:
         Returns:
             (success, message)
         """
-        if not self.tiktok_available:
-            return False, "TikTok uploader not available"
+        # Load modules now if not already loaded
+        if not self._ensure_modules_loaded():
+            return False, "TikTok uploader modules could not be loaded"
 
         try:
             logger.info(f"Starting login for account: {account_name}")
@@ -150,6 +194,8 @@ class TikTokService:
 
         except Exception as e:
             logger.error(f"Login error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False, f"Login error: {str(e)}"
 
     def upload(
@@ -181,8 +227,9 @@ class TikTokService:
         Returns:
             (success, message)
         """
-        if not self.tiktok_available:
-            return False, "TikTok uploader not available"
+        # Load modules now if not already loaded
+        if not self._ensure_modules_loaded():
+            return False, "TikTok uploader modules could not be loaded"
 
         # Validate
         video_file = Path(video_path)
@@ -233,6 +280,8 @@ class TikTokService:
 
         except Exception as e:
             logger.error(f"Upload error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False, f"Upload error: {str(e)}"
 
     def delete_account(self, account_name: str) -> Tuple[bool, str]:
@@ -245,7 +294,7 @@ class TikTokService:
         Returns:
             (success, message)
         """
-        if not self.tiktok_available:
+        if not self.is_available():
             return False, "TikTok uploader not available"
 
         try:
@@ -292,12 +341,14 @@ class TikTokService:
 
     def get_cookies_dir(self) -> Path:
         """Get cookies directory path"""
-        if TIKTOK_UPLOADER_PATH is None:
+        uploader_path = self._find_uploader_path()
+        if uploader_path is None:
             return Path("./CookiesDir")
-        return TIKTOK_UPLOADER_PATH / "CookiesDir"
+        return uploader_path / "CookiesDir"
 
     def get_videos_dir(self) -> Path:
         """Get videos directory path"""
-        if TIKTOK_UPLOADER_PATH is None:
+        uploader_path = self._find_uploader_path()
+        if uploader_path is None:
             return Path("./VideosDirPath")
-        return TIKTOK_UPLOADER_PATH / "VideosDirPath"
+        return uploader_path / "VideosDirPath"
