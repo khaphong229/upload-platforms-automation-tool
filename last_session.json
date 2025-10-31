@@ -3,7 +3,12 @@
   "youtube_url": "https://youtu.be/kEXvrZTUX40?si=17RysF6QZvNVsHOO",
   "local_path": "C:/Users/ASUS/Videos/2025-10-20 20-10-28.mp4",
   "title": "Hanoi Convention against cybercrime - The Point | Vietnam Today",
-  "apk_links": [],
+  "apk_links": [
+    [
+      "youtube",
+      "https://www.youtube.com/"
+    ]
+  ],
   "skip_download": false,
   "skip_blog": false,
   "draft": false,
@@ -22,5 +27,6 @@
   "wordpress_url": "",
   "wordpress_username": "",
   "wordpress_password": "",
-  "language": "vietnamese"
+  "language": "vietnamese",
+  "generate_images": true
 }

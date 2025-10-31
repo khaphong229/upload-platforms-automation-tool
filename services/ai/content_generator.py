@@ -3,6 +3,7 @@ import google.generativeai as genai
 from config import GEMINI_API_KEY
 from .ai_config import AIConfig
 from .prompt_manager import PromptManager
+from .image_generator import ImageGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ class ContentGenerator:
             genai.configure(api_key=self.api_key)
             self.model = genai.GenerativeModel('gemini-2.0-flash')
     
-    def generate_blog_post(self, title, video_info, apk_links, max_tokens=None, prompt_id=None, language="vietnamese"):
+    def generate_blog_post(self, title, video_info, apk_links, max_tokens=None, prompt_id=None, language="vietnamese", generate_images=True, image_count=1):
         """
         Generate a blog post about a video with APK links
 
@@ -43,11 +44,13 @@ class ContentGenerator:
             max_tokens (int): Maximum number of tokens for the generated content
             prompt_id (str): ID of the prompt template to use (optional)
             language (str): Language for the content ('vietnamese' or 'english')
+            generate_images (bool): Whether to generate AI images for the post
+            image_count (int): Number of images to generate (default: 1)
 
         Returns:
-            str: The generated blog post content
+            tuple: (str, list) - The generated blog post content and list of generated images
         """
-        logger.info(f"Generating blog post for: {title} (Language: {language})")
+        logger.info(f"Generating blog post for: {title} (Language: {language}, Images: {image_count if generate_images else 0})")
 
         # Get provider configuration
         provider_config = self.ai_config.get_provider_config()
@@ -77,13 +80,37 @@ class ContentGenerator:
             # Extract the generated content
             content = response.text.strip()
             logger.info(f"Successfully generated blog post of {len(content)} characters")
+
+            # Generate images if requested
+            generated_images = []
+            if generate_images and image_count > 0:
+                try:
+                    logger.info(f"Generating {image_count} image(s) for blog post...")
+                    image_gen = ImageGenerator()
+                    video_description = video_info.get('description', '') if video_info else ''
+                    generated_images = image_gen.generate_blog_image(
+                        title=title,
+                        description=video_description[:200],  # Limit description length
+                        language=language,
+                        count=image_count
+                    )
+
+                    # Embed images in content
+                    if generated_images:
+                        content = self._embed_images_in_content(content, generated_images)
+                        logger.info(f"Embedded {len(generated_images)} image(s) in blog post")
+
+                except Exception as img_error:
+                    logger.error(f"Error generating images: {str(img_error)}")
+                    # Continue without images
+
             logger.info(content)
-            return content
-            
+            return content, generated_images
+
         except Exception as e:
             logger.error(f"Error generating blog post: {str(e)}")
             # Fallback to a simple template if AI generation fails
-            return self._create_fallback_content(title, video_info, apk_links)
+            return self._create_fallback_content(title, video_info, apk_links), []
     
     def _create_blog_prompt(self, title, video_info, apk_links, prompt_id, language="vietnamese"):
         """Create a prompt for the AI to generate a blog post"""
@@ -145,6 +172,44 @@ Remember: {language_instruction}
 """
             return prompt
     
+    def _embed_images_in_content(self, content: str, images: list) -> str:
+        """Embed generated images into the blog post HTML content"""
+
+        if not images:
+            return content
+
+        # Create image HTML
+        images_html = ""
+        for idx, img in enumerate(images):
+            # Use base64 data URL for embedded images
+            if img.get('base64'):
+                img_src = f"data:image/png;base64,{img['base64']}"
+            else:
+                img_src = img.get('url', '')
+
+            if img_src:
+                images_html += f'''
+<div class="blog-image" style="text-align: center; margin: 20px 0;">
+    <img src="{img_src}" alt="Blog featured image {idx + 1}" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);" />
+</div>
+'''
+
+        # Try to insert after the first heading or at the beginning
+        # Look for first <h1> or <h2> tag
+        import re
+
+        # Try to insert after first heading
+        heading_match = re.search(r'(<h[12][^>]*>.*?</h[12]>)', content, re.IGNORECASE | re.DOTALL)
+        if heading_match:
+            # Insert after first heading
+            insert_pos = heading_match.end()
+            content = content[:insert_pos] + images_html + content[insert_pos:]
+        else:
+            # Insert at the beginning if no heading found
+            content = images_html + content
+
+        return content
+
     def _create_fallback_content(self, title, video_info, apk_links):
         """Create a simple blog post template as fallback"""
         

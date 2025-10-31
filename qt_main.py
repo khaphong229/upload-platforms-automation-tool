@@ -20,6 +20,7 @@ from services.youtube import YouTubeDownloader
 from services.shortener import URLShortener
 from services.ai import ContentGenerator
 from services.blogger import BloggerPublisher, WordPressPublisher
+from services.tiktok import TikTokService
 from utils import sanitize_filename, clean_temp_dir
 from qt_ai_settings import AISettingsDialog
 
@@ -52,22 +53,24 @@ class APKLinkDialog(QDialog):
 class ContentPreviewDialog(QDialog):
     """Dialog to preview and approve/regenerate AI-generated content before posting"""
 
-    def __init__(self, title: str, content: str, parent=None, language: str = "vietnamese"):
+    def __init__(self, title: str, content: str, parent=None, language: str = "vietnamese", images: list = None):
         super().__init__(parent)
         self.setWindowTitle("Preview Blog Content")
         self.setModal(True)
         self.resize(900, 700)
         self.approved = False
         self.regenerate = False
+        self.images = images or []
 
         # Create layout
         layout = QVBoxLayout()
 
         # Language indicator
         lang_flag = "🇻🇳 Vietnamese" if language == "vietnamese" else "🇺🇸 English"
+        image_info = f" | 🖼️ {len(self.images)} image(s)" if self.images else ""
 
         # Title section
-        title_label = QLabel(f"<h2>📝 Preview: {title}</h2><p style='color: #8ecae6;'>Language: {lang_flag}</p>")
+        title_label = QLabel(f"<h2>📝 Preview: {title}</h2><p style='color: #8ecae6;'>Language: {lang_flag}{image_info}</p>")
         title_label.setWordWrap(True)
         layout.addWidget(title_label)
 
@@ -156,13 +159,13 @@ class WorkerThread(QThread):
     progress = pyqtSignal(int, str)
     completed = pyqtSignal(bool, str)
     step_done = pyqtSignal(str)
-    content_generated = pyqtSignal(str, str)  # (title, content)
+    content_generated = pyqtSignal(str, str, list)  # (title, content, images)
 
     def __init__(self, *, video_source: str, youtube_url: str, local_path: str,
                  title: str, apk_links: List[Tuple[str, str]],
                  skip_download: bool, skip_blog: bool, draft_mode: bool,
                  blog_platform: str = "blogger", wordpress_config: dict = None,
-                 language: str = "vietnamese"):
+                 language: str = "vietnamese", generate_images: bool = True):
         super().__init__()
         self.video_source = video_source
         self.youtube_url = youtube_url
@@ -175,6 +178,7 @@ class WorkerThread(QThread):
         self.blog_platform = blog_platform
         self.wordpress_config = wordpress_config or {}
         self.language = language
+        self.generate_images = generate_images
         self.approved_content = None
         self.should_regenerate = False
         self.user_approved = False
@@ -256,17 +260,21 @@ class WorkerThread(QThread):
                     try:
                         # Generate content
                         lang_name = "Vietnamese" if self.language == "vietnamese" else "English"
-                        self.safe_log("INFO", f"Generating blog content with AI ({lang_name})...")
+                        img_status = "with images" if self.generate_images else "without images"
+                        self.safe_log("INFO", f"Generating blog content with AI ({lang_name}, {img_status})...")
                         content_generator = ContentGenerator()
-                        blog_content = content_generator.generate_blog_post(
-                            self.title, video_info, shortened_links, language=self.language
+                        blog_content, generated_images = content_generator.generate_blog_post(
+                            self.title, video_info, shortened_links,
+                            language=self.language,
+                            generate_images=self.generate_images,
+                            image_count=1 if self.generate_images else 0
                         )
 
                         # Emit signal to show preview dialog in main thread
-                        self.safe_log("INFO", "Content generated, waiting for user approval...")
+                        self.safe_log("INFO", f"Content generated with {len(generated_images)} image(s), waiting for user approval...")
                         self.user_approved = False
                         self.should_regenerate = False
-                        self.content_generated.emit(self.title, blog_content)
+                        self.content_generated.emit(self.title, blog_content, generated_images)
 
                         # Wait for user decision
                         while not self.user_approved and not self.should_regenerate:
@@ -351,6 +359,21 @@ class MainWindow(QMainWindow):
         self.wordpress_username = ""
         self.wordpress_password = ""
 
+        # TikTok service
+        self.tiktok_service = TikTokService()
+        self.tiktok_accounts_list = QListWidget()
+        self.tiktok_video_edit = FileDropLineEdit()
+        self.tiktok_video_edit.setReadOnly(True)
+        self.tiktok_title_edit = QTextEdit()
+        self.tiktok_title_edit.setPlaceholderText("Video caption (max 2200 characters)...")
+        self.tiktok_schedule_hours = QComboBox()
+        self.tiktok_allow_comment = QCheckBox("Allow Comments")
+        self.tiktok_allow_comment.setChecked(True)
+        self.tiktok_allow_duet = QCheckBox("Allow Duet")
+        self.tiktok_allow_stitch = QCheckBox("Allow Stitch")
+        self.tiktok_is_private = QCheckBox("Private Video")
+        self.tiktok_worker = None
+
         self.youtube_url_edit = QLineEdit()
         self.title_edit = QLineEdit()
         self.local_video_edit = FileDropLineEdit()
@@ -363,6 +386,8 @@ class MainWindow(QMainWindow):
         self.skip_download_cb = QCheckBox("Skip Download")
         self.skip_blog_cb = QCheckBox("Skip Blog Creation")
         self.draft_cb = QCheckBox("Save as Draft")
+        self.generate_images_cb = QCheckBox("Generate AI Images")
+        self.generate_images_cb.setChecked(True)  # Default: enabled
 
         self.progress = QProgressBar()
         self.status_label = QLabel("Ready")
@@ -389,6 +414,10 @@ class MainWindow(QMainWindow):
         # Add AI Settings tab
         ai_settings_tab = QWidget()
         tabs.addTab(ai_settings_tab, "AI Settings")
+
+        # Add TikTok Upload tab
+        tiktok_tab = QWidget()
+        tabs.addTab(tiktok_tab, "TikTok Upload")
 
         outer = QVBoxLayout(content_tab)
 
@@ -469,6 +498,7 @@ class MainWindow(QMainWindow):
         opt_row.addWidget(self.skip_download_cb)
         opt_row.addWidget(self.skip_blog_cb)
         opt_row.addWidget(self.draft_cb)
+        opt_row.addWidget(self.generate_images_cb)
         opt_row.addStretch(1)
         options_group.setLayout(opt_row)
 
@@ -564,6 +594,9 @@ class MainWindow(QMainWindow):
 
         # Build AI Settings tab UI
         self._build_ai_settings_tab(ai_settings_tab)
+
+        # Build TikTok Upload tab UI
+        self._build_tiktok_tab(tiktok_tab)
 
     def _build_blog_platform_tab(self, parent):
         """Build the Blog Platform Configuration tab"""
@@ -835,6 +868,155 @@ class MainWindow(QMainWindow):
                     tabs.insertTab(i, ai_settings_tab, "AI Settings")
                     break
 
+    def _build_tiktok_tab(self, parent):
+        """Build the TikTok Upload tab"""
+        layout = QVBoxLayout(parent)
+
+        # Header
+        header = QLabel("<h2>📱 TikTok Video Uploader</h2>")
+        layout.addWidget(header)
+
+        # Status banner
+        if not self.tiktok_service.is_available():
+            error_label = QLabel(
+                "⚠️ TikTok Uploader not available.\n\n"
+                "Expected path: E:\\Workspace\\Tool\\TiktokAutoUploader\n\n"
+                "Required packages:\n"
+                "• undetected-chromedriver\n"
+                "• moviepy==1.0.3\n"
+                "• beautifulsoup4\n"
+                "• requests\n\n"
+                "If you've just installed packages, click 'Refresh' or restart the application."
+            )
+            error_label.setWordWrap(True)
+            error_label.setStyleSheet("background-color: #ff6b6b; color: white; padding: 15px; border-radius: 4px;")
+            layout.addWidget(error_label)
+
+            # Add refresh button
+            refresh_btn = QPushButton("🔄 Refresh / Retry")
+            refresh_btn.setMaximumWidth(200)
+            refresh_btn.clicked.connect(self._refresh_tiktok_service)
+            layout.addWidget(refresh_btn)
+
+            layout.addStretch()
+            return
+
+        # Account Management Group
+        account_group = QGroupBox("👤 Account Management")
+        account_layout = QVBoxLayout()
+
+        # Account list
+        account_layout.addWidget(QLabel("Saved Accounts:"))
+        account_layout.addWidget(self.tiktok_accounts_list)
+
+        # Account buttons
+        account_btns = QHBoxLayout()
+        self.btn_tiktok_login = QPushButton("Login New Account")
+        self.btn_tiktok_refresh = QPushButton("Refresh List")
+        self.btn_tiktok_delete = QPushButton("Delete Selected")
+        account_btns.addWidget(self.btn_tiktok_login)
+        account_btns.addWidget(self.btn_tiktok_refresh)
+        account_btns.addWidget(self.btn_tiktok_delete)
+        account_btns.addStretch()
+        account_layout.addLayout(account_btns)
+
+        account_group.setLayout(account_layout)
+        layout.addWidget(account_group)
+
+        # Video Upload Group
+        upload_group = QGroupBox("🎬 Video Upload")
+        upload_layout = QVBoxLayout()
+
+        # Video file selection
+        video_row = QHBoxLayout()
+        video_row.addWidget(QLabel("Video File:"))
+        video_row.addWidget(self.tiktok_video_edit)
+        self.btn_tiktok_browse = QPushButton("Browse")
+        video_row.addWidget(self.btn_tiktok_browse)
+        upload_layout.addLayout(video_row)
+
+        # Caption/Title
+        upload_layout.addWidget(QLabel("Caption:"))
+        self.tiktok_title_edit.setMaximumHeight(100)
+        upload_layout.addWidget(self.tiktok_title_edit)
+
+        # Character counter
+        self.tiktok_char_label = QLabel("0 / 2200 characters")
+        self.tiktok_char_label.setStyleSheet("color: #aaa; font-style: italic;")
+        upload_layout.addWidget(self.tiktok_char_label)
+
+        upload_group.setLayout(upload_layout)
+        layout.addWidget(upload_group)
+
+        # Settings Group
+        settings_group = QGroupBox("⚙️ Upload Settings")
+        settings_layout = QVBoxLayout()
+
+        # Privacy options
+        privacy_row = QHBoxLayout()
+        privacy_row.addWidget(self.tiktok_allow_comment)
+        privacy_row.addWidget(self.tiktok_allow_duet)
+        privacy_row.addWidget(self.tiktok_allow_stitch)
+        privacy_row.addWidget(self.tiktok_is_private)
+        privacy_row.addStretch()
+        settings_layout.addLayout(privacy_row)
+
+        # Schedule time
+        schedule_row = QHBoxLayout()
+        schedule_row.addWidget(QLabel("Schedule:"))
+        self.tiktok_schedule_hours.addItem("Post Now", 0)
+        self.tiktok_schedule_hours.addItem("15 minutes", 900)
+        self.tiktok_schedule_hours.addItem("1 hour", 3600)
+        self.tiktok_schedule_hours.addItem("3 hours", 10800)
+        self.tiktok_schedule_hours.addItem("6 hours", 21600)
+        self.tiktok_schedule_hours.addItem("12 hours", 43200)
+        self.tiktok_schedule_hours.addItem("1 day", 86400)
+        self.tiktok_schedule_hours.addItem("2 days", 172800)
+        self.tiktok_schedule_hours.addItem("3 days", 259200)
+        self.tiktok_schedule_hours.addItem("7 days", 604800)
+        schedule_row.addWidget(self.tiktok_schedule_hours)
+        schedule_row.addStretch()
+        settings_layout.addLayout(schedule_row)
+
+        settings_group.setLayout(settings_layout)
+        layout.addWidget(settings_group)
+
+        # Upload button
+        button_row = QHBoxLayout()
+        self.btn_tiktok_upload = QPushButton("Upload to TikTok")
+        self.btn_tiktok_upload.setMinimumHeight(40)
+        self.btn_tiktok_upload.setStyleSheet("background-color: #80ed99; color: black; font-weight: bold; font-size: 14px;")
+        button_row.addWidget(self.btn_tiktok_upload)
+        layout.addLayout(button_row)
+
+        # Info section
+        info_group = QGroupBox("ℹ️ Information")
+        info_layout = QVBoxLayout()
+        info_text = QLabel(
+            "<b>How to use:</b><br>"
+            "1. Login to your TikTok account (opens browser)<br>"
+            "2. Select the saved account from the list<br>"
+            "3. Choose a video file (MP4, WebM, MOV, etc.)<br>"
+            "4. Write your caption (max 2200 characters)<br>"
+            "5. Configure privacy and schedule settings<br>"
+            "6. Click 'Upload to TikTok'<br><br>"
+            "<b>Notes:</b><br>"
+            "• Login is done through browser (handles 2FA)<br>"
+            "• Private videos cannot be scheduled<br>"
+            "• Schedule time: 15 min to 10 days in future<br>"
+            "• Max video size: ~1800MB<br>"
+            "• Supports hashtags (#) and mentions (@) in caption"
+        )
+        info_text.setWordWrap(True)
+        info_layout.addWidget(info_text)
+        info_group.setLayout(info_layout)
+        layout.addWidget(info_group)
+
+        layout.addStretch()
+
+        # Load accounts
+        self._refresh_tiktok_accounts()
+
     def _wire_events(self):
         self.source_youtube.toggled.connect(self._on_source_changed)
         self.source_youtube.toggled.connect(self._save_session)
@@ -853,6 +1035,7 @@ class MainWindow(QMainWindow):
         self.skip_download_cb.stateChanged.connect(self._save_session)
         self.skip_blog_cb.stateChanged.connect(self._save_session)
         self.draft_cb.stateChanged.connect(self._save_session)
+        self.generate_images_cb.stateChanged.connect(self._save_session)
         self.btn_add_shortener.clicked.connect(self._add_or_update_shortener)
         self.btn_remove_shortener.clicked.connect(self._remove_selected_shortener)
         self.shortener_list.itemSelectionChanged.connect(self._on_shortener_list_selected)
@@ -863,6 +1046,15 @@ class MainWindow(QMainWindow):
         self.btn_hist_edit.clicked.connect(self._edit_shortened_item)
         self.btn_hist_delete.clicked.connect(self._remove_shortened_item)
         self.language_combo.currentIndexChanged.connect(self._save_session)
+
+        # TikTok events
+        if self.tiktok_service.is_available():
+            self.btn_tiktok_login.clicked.connect(self._on_tiktok_login)
+            self.btn_tiktok_refresh.clicked.connect(self._refresh_tiktok_accounts)
+            self.btn_tiktok_delete.clicked.connect(self._on_tiktok_delete_account)
+            self.btn_tiktok_browse.clicked.connect(self._on_tiktok_browse_video)
+            self.btn_tiktok_upload.clicked.connect(self._on_tiktok_upload)
+            self.tiktok_title_edit.textChanged.connect(self._on_tiktok_caption_changed)
 
     def _validate_config(self):
         try:
@@ -1047,7 +1239,8 @@ class MainWindow(QMainWindow):
                 'username': self.wordpress_username,
                 'password': self.wordpress_password
             },
-            language=selected_language
+            language=selected_language,
+            generate_images=self.generate_images_cb.isChecked()
         )
         self.worker.log.connect(lambda m: self._log("INFO" if m.startswith("[INFO]") else "LOG", m))
         self.worker.progress.connect(self._on_progress)
@@ -1068,16 +1261,17 @@ class MainWindow(QMainWindow):
         self.progress.setValue(max(0, min(100, value)))
         self.status_label.setText(status)
 
-    def _on_content_generated(self, title: str, content: str):
+    def _on_content_generated(self, title: str, content: str, images: list):
         """Handle content generation and show preview dialog"""
-        self._log("STEP", "Content generated, showing preview...")
+        image_count = len(images) if images else 0
+        self._log("STEP", f"Content generated with {image_count} image(s), showing preview...")
         self.status_label.setText("Reviewing content...")
 
         # Get current language for display
         current_language = self.language_combo.currentData()
 
         # Show preview dialog
-        dialog = ContentPreviewDialog(title, content, self, language=current_language)
+        dialog = ContentPreviewDialog(title, content, self, language=current_language, images=images)
         result = dialog.exec_()
 
         if result == QDialog.Accepted:
@@ -1243,7 +1437,8 @@ class MainWindow(QMainWindow):
                 "wordpress_url": self.wordpress_url,
                 "wordpress_username": self.wordpress_username,
                 "wordpress_password": self.wordpress_password,
-                "language": self.language_combo.currentData() if self.language_combo.currentIndex() >= 0 else "vietnamese"
+                "language": self.language_combo.currentData() if self.language_combo.currentIndex() >= 0 else "vietnamese",
+                "generate_images": self.generate_images_cb.isChecked()
             }
             self.session_path.write_text(__import__("json").dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
@@ -1270,6 +1465,7 @@ class MainWindow(QMainWindow):
             self.skip_download_cb.setChecked(bool(data.get("skip_download", False)))
             self.skip_blog_cb.setChecked(bool(data.get("skip_blog", False)))
             self.draft_cb.setChecked(bool(data.get("draft", False)))
+            self.generate_images_cb.setChecked(bool(data.get("generate_images", True)))
             # load shorteners
             self.shorteners = data.get("shorteners", []) or []
             self.shortener_combo.clear()
@@ -1307,6 +1503,335 @@ class MainWindow(QMainWindow):
             self._refresh_shortened_history()
         except Exception:
             pass
+
+    # TikTok Methods
+    def _refresh_tiktok_service(self):
+        """Refresh TikTok service and rebuild tab"""
+        try:
+            from services.tiktok import TikTokService
+            self.tiktok_service = TikTokService()
+
+            if self.tiktok_service.is_available():
+                self._log("INFO", "TikTok service loaded successfully!")
+                self._show_toast("TikTok service available!")
+                QMessageBox.information(
+                    self, "Success",
+                    "TikTok service is now available!\n\nThe tab will be rebuilt automatically."
+                )
+            else:
+                self._log("WARNING", "TikTok service still not available")
+                QMessageBox.warning(
+                    self, "Still Not Available",
+                    "TikTok service could not be loaded.\n\n"
+                    "Please check:\n"
+                    "1. TikTokAutoUploader exists at E:\\Workspace\\Tool\\TiktokAutoUploader\n"
+                    "2. Required packages are installed\n"
+                    "3. Try restarting the application"
+                )
+
+            # Rebuild the TikTok tab
+            tabs = self.centralWidget().findChild(QTabWidget)
+            if tabs:
+                for i in range(tabs.count()):
+                    if tabs.tabText(i) == "TikTok Upload":
+                        old_widget = tabs.widget(i)
+                        tabs.removeTab(i)
+
+                        tiktok_tab = QWidget()
+                        self._build_tiktok_tab(tiktok_tab)
+                        tabs.insertTab(i, tiktok_tab, "TikTok Upload")
+                        tabs.setCurrentIndex(i)
+                        break
+        except Exception as e:
+            self._log("ERROR", f"Error refreshing TikTok service: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to refresh:\n{str(e)}")
+
+    def _refresh_tiktok_accounts(self):
+        """Refresh the list of TikTok accounts"""
+        if not self.tiktok_service.is_available():
+            return
+
+        self.tiktok_accounts_list.clear()
+        accounts = self.tiktok_service.get_saved_accounts()
+
+        if not accounts:
+            item = QListWidgetItem("No accounts saved. Click 'Login New Account' to start.")
+            item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+            self.tiktok_accounts_list.addItem(item)
+        else:
+            for account in accounts:
+                self.tiktok_accounts_list.addItem(account)
+
+        self._log("INFO", f"Found {len(accounts)} TikTok account(s)")
+
+    def _on_tiktok_login(self):
+        """Handle TikTok login"""
+        if not self.tiktok_service.is_available():
+            QMessageBox.warning(self, "Warning", "TikTok service not available")
+            return
+
+        # Ask for account name
+        from PyQt5.QtWidgets import QInputDialog
+        account_name, ok = QInputDialog.getText(
+            self, "Login to TikTok",
+            "Enter a name for this account:\n(e.g., 'my_account', 'business_account')"
+        )
+
+        if not ok or not account_name.strip():
+            return
+
+        account_name = account_name.strip()
+
+        # Check if account already exists
+        if account_name in self.tiktok_service.get_saved_accounts():
+            reply = QMessageBox.question(
+                self, "Account Exists",
+                f"Account '{account_name}' already exists. Do you want to re-login?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        self._log("INFO", f"Starting TikTok login for: {account_name}")
+        self._log("INFO", "Browser will open - please login manually...")
+
+        QMessageBox.information(
+            self, "TikTok Login",
+            f"A browser window will open.\n\n"
+            f"Please login to TikTok account: {account_name}\n\n"
+            f"After successful login, the browser will close automatically.\n"
+            f"This may take a few moments..."
+        )
+
+        try:
+            # Run login in separate thread to prevent GUI freeze
+            from PyQt5.QtCore import QThread, pyqtSignal
+
+            class LoginWorker(QThread):
+                finished = pyqtSignal(bool, str)
+
+                def __init__(self, service, account):
+                    super().__init__()
+                    self.service = service
+                    self.account = account
+
+                def run(self):
+                    success, message = self.service.login_account(self.account)
+                    self.finished.emit(success, message)
+
+            self.login_worker = LoginWorker(self.tiktok_service, account_name)
+            self.login_worker.finished.connect(lambda success, msg: self._on_login_completed(success, msg, account_name))
+            self.login_worker.start()
+
+            self.status_label.setText(f"Logging in to {account_name}...")
+            self._show_toast("Browser opening...")
+
+        except Exception as e:
+            error_msg = f"Login error: {str(e)}"
+            self._log("ERROR", error_msg)
+            QMessageBox.critical(self, "Error", error_msg)
+
+    def _on_login_completed(self, success: bool, message: str, account_name: str):
+        """Handle login completion"""
+        if success:
+            self._log("INFO", f"✓ Login successful: {account_name}")
+            self._show_toast(f"Login successful: {account_name}")
+            QMessageBox.information(self, "Success", message)
+            self._refresh_tiktok_accounts()
+            self.status_label.setText("Ready")
+        else:
+            self._log("ERROR", f"✗ Login failed: {message}")
+            QMessageBox.critical(self, "Login Failed", message)
+            self.status_label.setText("Login failed")
+
+    def _on_tiktok_delete_account(self):
+        """Handle account deletion"""
+        selected = self.tiktok_accounts_list.selectedItems()
+        if not selected:
+            QMessageBox.warning(self, "Warning", "Please select an account to delete")
+            return
+
+        account_name = selected[0].text()
+
+        reply = QMessageBox.question(
+            self, "Confirm Delete",
+            f"Are you sure you want to delete account '{account_name}'?\n\n"
+            "This will remove the saved session cookies.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        success, message = self.tiktok_service.delete_account(account_name)
+
+        if success:
+            self._log("INFO", message)
+            self._show_toast(f"Deleted: {account_name}")
+            self._refresh_tiktok_accounts()
+        else:
+            self._log("ERROR", message)
+            QMessageBox.critical(self, "Error", message)
+
+    def _on_tiktok_browse_video(self):
+        """Browse for TikTok video file"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Video File", "",
+            "Video Files (*.mp4 *.avi *.mov *.webm *.mkv *.flv);;All Files (*.*)"
+        )
+
+        if path:
+            self.tiktok_video_edit.setText(path)
+
+            # Validate video
+            valid, message = self.tiktok_service.validate_video(path)
+            if valid:
+                self._log("INFO", f"Video selected: {message}")
+            else:
+                self._log("WARNING", f"Video warning: {message}")
+                QMessageBox.warning(self, "Video Warning", message)
+
+    def _on_tiktok_caption_changed(self):
+        """Update character count for caption"""
+        text = self.tiktok_title_edit.toPlainText()
+        char_count = len(text)
+        self.tiktok_char_label.setText(f"{char_count} / 2200 characters")
+
+        if char_count > 2200:
+            self.tiktok_char_label.setStyleSheet("color: #ff6b6b; font-style: italic; font-weight: bold;")
+        else:
+            self.tiktok_char_label.setStyleSheet("color: #aaa; font-style: italic;")
+
+    def _on_tiktok_upload(self):
+        """Handle TikTok video upload"""
+        if not self.tiktok_service.is_available():
+            QMessageBox.warning(self, "Warning", "TikTok service not available")
+            return
+
+        # Validate inputs
+        selected_accounts = self.tiktok_accounts_list.selectedItems()
+        if not selected_accounts:
+            QMessageBox.warning(self, "Warning", "Please select an account")
+            return
+
+        account_name = selected_accounts[0].text()
+        if account_name.startswith("No accounts"):
+            QMessageBox.warning(self, "Warning", "Please login to an account first")
+            return
+
+        video_path = self.tiktok_video_edit.text().strip()
+        if not video_path:
+            QMessageBox.warning(self, "Warning", "Please select a video file")
+            return
+
+        caption = self.tiktok_title_edit.toPlainText().strip()
+        if not caption:
+            reply = QMessageBox.question(
+                self, "No Caption",
+                "Upload without a caption?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        if len(caption) > 2200:
+            QMessageBox.warning(self, "Warning", "Caption is too long (max 2200 characters)")
+            return
+
+        # Get settings
+        schedule_time = self.tiktok_schedule_hours.currentData()
+        is_private = self.tiktok_is_private.isChecked()
+
+        if is_private and schedule_time > 0:
+            QMessageBox.warning(self, "Warning", "Private videos cannot be scheduled")
+            return
+
+        # Confirm upload
+        schedule_text = "now" if schedule_time == 0 else f"in {self.tiktok_schedule_hours.currentText()}"
+        privacy_text = "private" if is_private else "public"
+
+        reply = QMessageBox.question(
+            self, "Confirm Upload",
+            f"Upload video to TikTok?\n\n"
+            f"Account: {account_name}\n"
+            f"Video: {Path(video_path).name}\n"
+            f"Caption: {caption[:50]}{'...' if len(caption) > 50 else ''}\n"
+            f"Privacy: {privacy_text}\n"
+            f"Schedule: {schedule_text}\n"
+            f"Comments: {'allowed' if self.tiktok_allow_comment.isChecked() else 'disabled'}\n"
+            f"Duet: {'allowed' if self.tiktok_allow_duet.isChecked() else 'disabled'}\n"
+            f"Stitch: {'allowed' if self.tiktok_allow_stitch.isChecked() else 'disabled'}",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # Start upload worker
+        self._log("STEP", f"Starting TikTok upload to account: {account_name}")
+        self.btn_tiktok_upload.setEnabled(False)
+        self.status_label.setText("Uploading to TikTok...")
+
+        from PyQt5.QtCore import QThread, pyqtSignal
+
+        class TikTokUploadWorker(QThread):
+            finished = pyqtSignal(bool, str)
+            log = pyqtSignal(str, str)
+
+            def __init__(self, service, account, video, caption, settings):
+                super().__init__()
+                self.service = service
+                self.account = account
+                self.video = video
+                self.caption = caption
+                self.settings = settings
+
+            def run(self):
+                try:
+                    self.log.emit("INFO", "Starting TikTok upload...")
+                    success, message = self.service.upload(
+                        account_name=self.account,
+                        video_path=self.video,
+                        title=self.caption,
+                        **self.settings
+                    )
+                    self.finished.emit(success, message)
+                except Exception as e:
+                    self.finished.emit(False, f"Upload error: {str(e)}")
+
+        settings = {
+            'schedule_time': schedule_time,
+            'allow_comment': self.tiktok_allow_comment.isChecked(),
+            'allow_duet': self.tiktok_allow_duet.isChecked(),
+            'allow_stitch': self.tiktok_allow_stitch.isChecked(),
+            'is_private': is_private
+        }
+
+        self.tiktok_worker = TikTokUploadWorker(
+            self.tiktok_service, account_name, video_path, caption, settings
+        )
+        self.tiktok_worker.log.connect(self._log)
+        self.tiktok_worker.finished.connect(self._on_tiktok_upload_completed)
+        self.tiktok_worker.start()
+
+    def _on_tiktok_upload_completed(self, success: bool, message: str):
+        """Handle upload completion"""
+        self.btn_tiktok_upload.setEnabled(True)
+
+        if success:
+            self._log("STEP", f"✓ TikTok upload successful!")
+            self._log("INFO", message)
+            self._show_toast("Upload successful!")
+            self.status_label.setText("Upload completed")
+            QMessageBox.information(self, "Success", message)
+
+            # Clear form
+            self.tiktok_video_edit.clear()
+            self.tiktok_title_edit.clear()
+        else:
+            self._log("ERROR", f"✗ TikTok upload failed: {message}")
+            self.status_label.setText("Upload failed")
+            QMessageBox.critical(self, "Upload Failed", message)
 
     def closeEvent(self, event):
         self._save_session()

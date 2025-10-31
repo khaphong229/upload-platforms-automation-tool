@@ -26,3 +26,4 @@ geckodriver.exe
 chrome_profiles/
 .idea/
 .vscode/
+nul
