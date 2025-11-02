@@ -490,6 +490,11 @@ class TikTokService:
                 msg_vi = get_message("upload_failed", "vi")
                 return False, f"{msg_en}\n{msg_vi}"
 
+        except ConnectionError as e:
+            logger.error(f"Connection error during upload: {e}")
+            msg_en = "Connection error: Network connection was interrupted. Please check your internet connection and try again."
+            msg_vi = "Lỗi kết nối: Kết nối mạng bị gián đoạn. Vui lòng kiểm tra kết nối internet và thử lại."
+            return False, f"{msg_en}\n{msg_vi}"
         except Exception as e:
             logger.error(f"Upload error: {e}")
             import traceback

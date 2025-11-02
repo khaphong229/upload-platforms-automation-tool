@@ -169,6 +169,9 @@ else:
 1. ✅ `E:\Workspace\Tool\TiktokAutoUploader\tiktok_uploader\tiktok.py`
    - Added `return True` after successful upload (line 349-351)
    - Added progress logging (lines 405-411)
+   - Added retry logic for chunk uploads with exponential backoff (lines 438-456)
+   - Added connection pooling and keep-alive (lines 90-115)
+   - Added 30-second timeout to all chunk upload requests
 
 2. ✅ `E:\Workspace\Tool\TiktokAutoUploader\tiktok_uploader\bot_utils.py`
    - Added 30-second timeout to Node.js subprocess (lines 8-29)
@@ -178,6 +181,7 @@ else:
    - Already has proper working directory management
    - Already has account name sanitization
    - Already has config loading fix
+   - Added specific ConnectionError handling with bilingual messages (lines 493-497)
 
 ## Status: FULLY WORKING! 🎉
 
@@ -189,6 +193,9 @@ else:
 ✅ **Works from both GUI and code**
 ✅ **Correct chunk count (1 chunk for 4.48MB video, not 436!)**
 ✅ **Fast upload speed (~1-2 seconds for small videos)**
+✅ **Automatic retry on connection errors (3 attempts with exponential backoff)**
+✅ **Connection pooling and keep-alive for stability**
+✅ **User-friendly bilingual error messages**
 
 ## What's Next
 

@@ -29,3 +29,6 @@ chrome_profiles/
 nul
 CookiesDir/
 *.cookie
+VideosDirPath/
+*.md
+!README.md
