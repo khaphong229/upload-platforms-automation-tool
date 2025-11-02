@@ -187,6 +187,8 @@ else:
 ✅ **30-second timeout prevents infinite hangs**
 ✅ **Detailed debug logging**
 ✅ **Works from both GUI and code**
+✅ **Correct chunk count (1 chunk for 4.48MB video, not 436!)**
+✅ **Fast upload speed (~1-2 seconds for small videos)**
 
 ## What's Next
 

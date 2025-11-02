@@ -14,7 +14,9 @@
       "Bash(del /q \"C:\\Users\\ASUS\\appdata\\roaming\\undetected_chromedriver\\undetected_chromedriver.exe\")",
       "Bash(reg query \"HKEY_CURRENT_USER\\Software\\Google\\Chrome\\BLBeacon\" /v version)",
       "Bash(node --version:*)",
-      "Bash(\"e:\\Workspace\\Tool\\Tiktok\\test_chrome_fix.py\")"
+      "Bash(\"e:\\Workspace\\Tool\\Tiktok\\test_chrome_fix.py\")",
+      "Bash(nul)",
+      "Bash(powershell -Command:*)"
     ],
     "deny": [],
     "ask": []
