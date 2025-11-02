@@ -8,7 +8,13 @@
       "Bash(pip install:*)",
       "Bash(pip uninstall:*)",
       "Bash(findstr:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(test:*)",
+      "Bash(python3:*)",
+      "Bash(del /q \"C:\\Users\\ASUS\\appdata\\roaming\\undetected_chromedriver\\undetected_chromedriver.exe\")",
+      "Bash(reg query \"HKEY_CURRENT_USER\\Software\\Google\\Chrome\\BLBeacon\" /v version)",
+      "Bash(node --version:*)",
+      "Bash(\"e:\\Workspace\\Tool\\Tiktok\\test_chrome_fix.py\")"
     ],
     "deny": [],
     "ask": []

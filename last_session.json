@@ -10,7 +10,7 @@
     ]
   ],
   "skip_download": false,
-  "skip_blog": false,
+  "skip_blog": true,
   "draft": false,
   "shorteners": [
     {
@@ -28,5 +28,8 @@
   "wordpress_username": "",
   "wordpress_password": "",
   "language": "vietnamese",
-  "generate_images": true
+  "generate_images": false,
+  "enable_tiktok": true,
+  "tiktok_account": "ppt_mod",
+  "tiktok_caption": ""
 }

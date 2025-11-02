@@ -27,3 +27,5 @@ chrome_profiles/
 .idea/
 .vscode/
 nul
+CookiesDir/
+*.cookie

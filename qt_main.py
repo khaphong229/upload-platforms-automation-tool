@@ -165,7 +165,9 @@ class WorkerThread(QThread):
                  title: str, apk_links: List[Tuple[str, str]],
                  skip_download: bool, skip_blog: bool, draft_mode: bool,
                  blog_platform: str = "blogger", wordpress_config: dict = None,
-                 language: str = "vietnamese", generate_images: bool = True):
+                 language: str = "vietnamese", generate_images: bool = True,
+                 upload_tiktok: bool = False, tiktok_account: str = "",
+                 tiktok_caption: str = "", tiktok_settings: dict = None):
         super().__init__()
         self.video_source = video_source
         self.youtube_url = youtube_url
@@ -182,6 +184,11 @@ class WorkerThread(QThread):
         self.approved_content = None
         self.should_regenerate = False
         self.user_approved = False
+        # TikTok upload options
+        self.upload_tiktok = upload_tiktok
+        self.tiktok_account = tiktok_account
+        self.tiktok_caption = tiktok_caption
+        self.tiktok_settings = tiktok_settings or {}
 
     def safe_log(self, level: str, message: str):
         self.log.emit(f"[{level}] {message}")
@@ -334,6 +341,49 @@ class WorkerThread(QThread):
                     self.completed.emit(False, str(e))
                     return
             self.step_done.emit("Blog created")
+
+            # Step 5: Upload to TikTok (if enabled)
+            if self.upload_tiktok and video_info:
+                self.safe_log("STEP", "Uploading to TikTok")
+                self.progress.emit(90, "Uploading to TikTok...")
+
+                try:
+                    from services.tiktok import TikTokService
+                    tiktok_service = TikTokService()
+
+                    if not tiktok_service.is_available():
+                        self.safe_log("WARNING", "TikTok service not available, skipping upload")
+                    elif not self.tiktok_account:
+                        self.safe_log("WARNING", "No TikTok account selected, skipping upload")
+                    else:
+                        video_path = video_info.get('file_path')
+                        caption = self.tiktok_caption or self.title
+
+                        self.safe_log("INFO", f"Uploading to TikTok account: {self.tiktok_account}")
+                        self.safe_log("INFO", f"Video: {Path(video_path).name}")
+                        self.safe_log("INFO", f"Caption: {caption[:50]}...")
+
+                        success, message = tiktok_service.upload(
+                            account_name=self.tiktok_account,
+                            video_path=video_path,
+                            title=caption,
+                            schedule_time=self.tiktok_settings.get('schedule_time', 0),
+                            allow_comment=self.tiktok_settings.get('allow_comment', True),
+                            allow_duet=self.tiktok_settings.get('allow_duet', False),
+                            allow_stitch=self.tiktok_settings.get('allow_stitch', False),
+                            is_private=self.tiktok_settings.get('is_private', False)
+                        )
+
+                        if success:
+                            self.safe_log("INFO", f"TikTok upload successful: {message}")
+                            self.step_done.emit("TikTok upload complete")
+                        else:
+                            self.safe_log("ERROR", f"TikTok upload failed: {message}")
+                            # Don't fail the whole process, just log the error
+
+                except Exception as e:
+                    self.safe_log("ERROR", f"TikTok upload error: {str(e)}")
+                    # Don't fail the whole process
 
             self.progress.emit(100, "Completed")
             self.step_done.emit("All tasks completed")
@@ -492,6 +542,74 @@ class MainWindow(QMainWindow):
         apk_layout.addLayout(apk_btn_row)
         apk_group.setLayout(apk_layout)
 
+        # TikTok Upload Group
+        tiktok_group = QGroupBox("📱 TikTok Upload (Optional)")
+        tiktok_layout = QVBoxLayout()
+
+        # Enable TikTok checkbox
+        self.enable_tiktok_cb = QCheckBox("Upload to TikTok")
+        self.enable_tiktok_cb.setChecked(False)
+        tiktok_layout.addWidget(self.enable_tiktok_cb)
+
+        # TikTok settings container
+        self.tiktok_settings_widget = QWidget()
+        tiktok_settings_layout = QVBoxLayout()
+        tiktok_settings_layout.setContentsMargins(20, 0, 0, 0)  # Indent
+
+        # Account selection
+        account_row = QHBoxLayout()
+        account_row.addWidget(QLabel("Account:"))
+        self.main_tiktok_account_combo = QComboBox()
+        self.main_tiktok_account_combo.setMinimumWidth(200)
+        account_row.addWidget(self.main_tiktok_account_combo)
+        self.btn_refresh_tiktok = QPushButton("🔄 Refresh")
+        self.btn_refresh_tiktok.setMaximumWidth(100)
+        account_row.addWidget(self.btn_refresh_tiktok)
+        account_row.addStretch(1)
+        tiktok_settings_layout.addLayout(account_row)
+
+        # Caption
+        caption_label = QLabel("Caption:")
+        tiktok_settings_layout.addWidget(caption_label)
+        self.main_tiktok_caption = QTextEdit()
+        self.main_tiktok_caption.setPlaceholderText("TikTok caption (leave empty to use blog title, max 2200 chars)...")
+        self.main_tiktok_caption.setMaximumHeight(80)
+        tiktok_settings_layout.addWidget(self.main_tiktok_caption)
+
+        # Character count
+        self.main_tiktok_char_label = QLabel("0 / 2200 characters")
+        self.main_tiktok_char_label.setStyleSheet("color: #aaa; font-style: italic;")
+        tiktok_settings_layout.addWidget(self.main_tiktok_char_label)
+
+        # Privacy and schedule options
+        tiktok_options_row = QHBoxLayout()
+        self.main_tiktok_schedule = QComboBox()
+        self.main_tiktok_schedule.addItem("Post Now", 0)
+        self.main_tiktok_schedule.addItem("1 hour", 3600)
+        self.main_tiktok_schedule.addItem("3 hours", 10800)
+        self.main_tiktok_schedule.addItem("12 hours", 43200)
+        self.main_tiktok_schedule.addItem("1 day", 86400)
+        self.main_tiktok_allow_comment = QCheckBox("Comments")
+        self.main_tiktok_allow_comment.setChecked(True)
+        self.main_tiktok_allow_duet = QCheckBox("Duet")
+        self.main_tiktok_allow_stitch = QCheckBox("Stitch")
+        self.main_tiktok_is_private = QCheckBox("Private")
+
+        tiktok_options_row.addWidget(QLabel("Schedule:"))
+        tiktok_options_row.addWidget(self.main_tiktok_schedule)
+        tiktok_options_row.addWidget(self.main_tiktok_allow_comment)
+        tiktok_options_row.addWidget(self.main_tiktok_allow_duet)
+        tiktok_options_row.addWidget(self.main_tiktok_allow_stitch)
+        tiktok_options_row.addWidget(self.main_tiktok_is_private)
+        tiktok_options_row.addStretch(1)
+        tiktok_settings_layout.addLayout(tiktok_options_row)
+
+        self.tiktok_settings_widget.setLayout(tiktok_settings_layout)
+        self.tiktok_settings_widget.setEnabled(False)  # Disabled by default
+        tiktok_layout.addWidget(self.tiktok_settings_widget)
+
+        tiktok_group.setLayout(tiktok_layout)
+
         # Options
         options_group = QGroupBox("⚙️ Processing Options")
         opt_row = QHBoxLayout()
@@ -521,6 +639,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(source_group)
         outer.addWidget(title_group)
         outer.addWidget(apk_group)
+        outer.addWidget(tiktok_group)
         outer.addWidget(options_group)
         outer.addLayout(ctrl_row)
         outer.addLayout(prog_row)
@@ -1047,7 +1166,15 @@ class MainWindow(QMainWindow):
         self.btn_hist_delete.clicked.connect(self._remove_shortened_item)
         self.language_combo.currentIndexChanged.connect(self._save_session)
 
-        # TikTok events
+        # Main tab TikTok events
+        self.enable_tiktok_cb.stateChanged.connect(self._on_enable_tiktok_changed)
+        self.btn_refresh_tiktok.clicked.connect(self._refresh_main_tiktok_accounts)
+        self.main_tiktok_caption.textChanged.connect(self._on_main_tiktok_caption_changed)
+        self.enable_tiktok_cb.stateChanged.connect(self._save_session)
+        self.main_tiktok_account_combo.currentIndexChanged.connect(self._save_session)
+        self.main_tiktok_schedule.currentIndexChanged.connect(self._save_session)
+
+        # TikTok tab events
         if self.tiktok_service.is_available():
             self.btn_tiktok_login.clicked.connect(self._on_tiktok_login)
             self.btn_tiktok_refresh.clicked.connect(self._refresh_tiktok_accounts)
@@ -1224,6 +1351,36 @@ class MainWindow(QMainWindow):
         # Get selected language
         selected_language = self.language_combo.currentData()
 
+        # Validate TikTok settings if enabled
+        upload_tiktok = self.enable_tiktok_cb.isChecked()
+        tiktok_account = ""
+        tiktok_caption = ""
+        tiktok_settings = {}
+
+        if upload_tiktok:
+            if self.main_tiktok_account_combo.currentIndex() < 0:
+                QMessageBox.warning(self, "Warning", "Please select a TikTok account or disable TikTok upload")
+                self.btn_start.setEnabled(True)
+                self.btn_stop.setEnabled(False)
+                return
+
+            tiktok_account = self.main_tiktok_account_combo.currentText()
+            tiktok_caption = self.main_tiktok_caption.toPlainText().strip()
+
+            if len(tiktok_caption) > 2200:
+                QMessageBox.warning(self, "Warning", "TikTok caption is too long (max 2200 characters)")
+                self.btn_start.setEnabled(True)
+                self.btn_stop.setEnabled(False)
+                return
+
+            tiktok_settings = {
+                'schedule_time': self.main_tiktok_schedule.currentData(),
+                'allow_comment': self.main_tiktok_allow_comment.isChecked(),
+                'allow_duet': self.main_tiktok_allow_duet.isChecked(),
+                'allow_stitch': self.main_tiktok_allow_stitch.isChecked(),
+                'is_private': self.main_tiktok_is_private.isChecked()
+            }
+
         self.worker = WorkerThread(
             video_source="youtube" if is_yt else "local",
             youtube_url=self.youtube_url_edit.text().strip(),
@@ -1240,7 +1397,11 @@ class MainWindow(QMainWindow):
                 'password': self.wordpress_password
             },
             language=selected_language,
-            generate_images=self.generate_images_cb.isChecked()
+            generate_images=self.generate_images_cb.isChecked(),
+            upload_tiktok=upload_tiktok,
+            tiktok_account=tiktok_account,
+            tiktok_caption=tiktok_caption,
+            tiktok_settings=tiktok_settings
         )
         self.worker.log.connect(lambda m: self._log("INFO" if m.startswith("[INFO]") else "LOG", m))
         self.worker.progress.connect(self._on_progress)
@@ -1438,7 +1599,10 @@ class MainWindow(QMainWindow):
                 "wordpress_username": self.wordpress_username,
                 "wordpress_password": self.wordpress_password,
                 "language": self.language_combo.currentData() if self.language_combo.currentIndex() >= 0 else "vietnamese",
-                "generate_images": self.generate_images_cb.isChecked()
+                "generate_images": self.generate_images_cb.isChecked(),
+                "enable_tiktok": self.enable_tiktok_cb.isChecked(),
+                "tiktok_account": self.main_tiktok_account_combo.currentText() if self.main_tiktok_account_combo.currentIndex() >= 0 else "",
+                "tiktok_caption": self.main_tiktok_caption.toPlainText().strip()
             }
             self.session_path.write_text(__import__("json").dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
@@ -1499,6 +1663,20 @@ class MainWindow(QMainWindow):
                 if self.language_combo.itemData(i) == saved_language:
                     self.language_combo.setCurrentIndex(i)
                     break
+
+            # Load TikTok settings
+            self.enable_tiktok_cb.setChecked(bool(data.get("enable_tiktok", False)))
+            self.main_tiktok_caption.setPlainText(data.get("tiktok_caption", ""))
+
+            # Refresh TikTok accounts
+            self._refresh_main_tiktok_accounts()
+
+            # Set selected TikTok account
+            saved_tiktok_account = data.get("tiktok_account", "")
+            if saved_tiktok_account:
+                idx = self.main_tiktok_account_combo.findText(saved_tiktok_account)
+                if idx >= 0:
+                    self.main_tiktok_account_combo.setCurrentIndex(idx)
 
             self._refresh_shortened_history()
         except Exception:
@@ -1563,6 +1741,45 @@ class MainWindow(QMainWindow):
                 self.tiktok_accounts_list.addItem(account)
 
         self._log("INFO", f"Found {len(accounts)} TikTok account(s)")
+
+    def _on_enable_tiktok_changed(self):
+        """Handle TikTok upload checkbox state change"""
+        enabled = self.enable_tiktok_cb.isChecked()
+        self.tiktok_settings_widget.setEnabled(enabled)
+
+        if enabled:
+            # Load TikTok accounts
+            self._refresh_main_tiktok_accounts()
+
+    def _refresh_main_tiktok_accounts(self):
+        """Refresh TikTok account list in main tab"""
+        self.main_tiktok_account_combo.clear()
+
+        if not self.tiktok_service.is_available():
+            self.main_tiktok_account_combo.addItem("TikTok service not available")
+            self.main_tiktok_account_combo.setEnabled(False)
+            return
+
+        accounts = self.tiktok_service.get_saved_accounts()
+
+        if not accounts:
+            self.main_tiktok_account_combo.addItem("No accounts (login in TikTok tab)")
+            self.main_tiktok_account_combo.setEnabled(False)
+        else:
+            self.main_tiktok_account_combo.setEnabled(True)
+            for account in accounts:
+                self.main_tiktok_account_combo.addItem(account)
+
+    def _on_main_tiktok_caption_changed(self):
+        """Update character count for main tab TikTok caption"""
+        text = self.main_tiktok_caption.toPlainText()
+        char_count = len(text)
+        self.main_tiktok_char_label.setText(f"{char_count} / 2200 characters")
+
+        if char_count > 2200:
+            self.main_tiktok_char_label.setStyleSheet("color: #ff6b6b; font-style: italic; font-weight: bold;")
+        else:
+            self.main_tiktok_char_label.setStyleSheet("color: #aaa; font-style: italic;")
 
     def _on_tiktok_login(self):
         """Handle TikTok login"""
