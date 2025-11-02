@@ -691,8 +691,47 @@ class MainWindow(QMainWindow):
         s_btns.addWidget(self.btn_remove_shortener)
         s_btns.addStretch(1)
         s_outer.addLayout(s_btns)
+
+        # Quick Link Shortener section
+        quick_shorten_group = QGroupBox("🔗 Quick Link Shortener")
+        quick_layout = QVBoxLayout()
+
+        # API selection
+        api_row = QHBoxLayout()
+        api_row.addWidget(QLabel("Select API:"))
+        self.quick_shortener_combo = QComboBox()
+        api_row.addWidget(self.quick_shortener_combo, 1)
+        quick_layout.addLayout(api_row)
+
+        # Original URL input
+        url_row = QHBoxLayout()
+        url_row.addWidget(QLabel("Original URL:"))
+        self.quick_url_input = QLineEdit()
+        self.quick_url_input.setPlaceholderText("https://example.com/your-long-url-here")
+        url_row.addWidget(self.quick_url_input, 1)
+        quick_layout.addLayout(url_row)
+
+        # Shorten button and result
+        result_row = QHBoxLayout()
+        self.btn_quick_shorten = QPushButton("🔗 Shorten URL")
+        self.btn_quick_shorten.setStyleSheet("background-color: #80ed99; color: black; font-weight: bold; padding: 8px;")
+        result_row.addWidget(self.btn_quick_shorten)
+
+        self.quick_result_label = QLabel("Shortened URL will appear here")
+        self.quick_result_label.setStyleSheet("color: #8ecae6; padding: 8px; background-color: rgba(142, 202, 230, 0.1); border-radius: 4px;")
+        self.quick_result_label.setWordWrap(True)
+        result_row.addWidget(self.quick_result_label, 1)
+
+        self.btn_copy_short_url = QPushButton("📋 Copy")
+        self.btn_copy_short_url.setEnabled(False)
+        result_row.addWidget(self.btn_copy_short_url)
+
+        quick_layout.addLayout(result_row)
+        quick_shorten_group.setLayout(quick_layout)
+        s_outer.addWidget(quick_shorten_group)
+
         # Shortened links history
-        hist_group = QGroupBox("Shortened Links")
+        hist_group = QGroupBox("📚 Shortened Links History")
         h_layout = QVBoxLayout()
         self.shortened_history = QListWidget()
         h_btns = QHBoxLayout()
@@ -1166,6 +1205,11 @@ class MainWindow(QMainWindow):
         self.btn_hist_delete.clicked.connect(self._remove_shortened_item)
         self.language_combo.currentIndexChanged.connect(self._save_session)
 
+        # Quick shortener events
+        self.btn_quick_shorten.clicked.connect(self._on_quick_shorten)
+        self.btn_copy_short_url.clicked.connect(self._on_copy_short_url)
+        self.quick_shortener_combo.currentIndexChanged.connect(self._on_quick_shortener_changed)
+
         # Main tab TikTok events
         self.enable_tiktok_cb.stateChanged.connect(self._on_enable_tiktok_changed)
         self.btn_refresh_tiktok.clicked.connect(self._refresh_main_tiktok_accounts)
@@ -1289,6 +1333,7 @@ class MainWindow(QMainWindow):
             self.shorteners.append(data)
             self.shortener_combo.addItem(name)
             self.shortener_list.addItem(name)
+            self.quick_shortener_combo.addItem(name)
         self._save_session()
         self._show_toast("Shortener saved")
 
@@ -1304,6 +1349,10 @@ class MainWindow(QMainWindow):
             if self.shortener_list.item(i).text() == name:
                 self.shortener_list.takeItem(i)
                 break
+        # remove from quick shortener combo
+        quick_idx = self.quick_shortener_combo.findText(name)
+        if quick_idx >= 0:
+            self.quick_shortener_combo.removeItem(quick_idx)
         self._save_session()
         self._show_toast("Shortener removed")
 
@@ -1323,6 +1372,89 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._log('ERROR', f'Shorten failed: {e}')
             return url
+
+    def _on_quick_shorten(self):
+        """Handle quick URL shortening"""
+        original_url = self.quick_url_input.text().strip()
+
+        if not original_url:
+            QMessageBox.warning(self, "Warning", "Please enter a URL to shorten")
+            return
+
+        if not original_url.startswith(('http://', 'https://')):
+            QMessageBox.warning(self, "Warning", "URL must start with http:// or https://")
+            return
+
+        # Get selected shortener
+        idx = self.quick_shortener_combo.currentIndex()
+        if idx < 0 or idx >= len(self.shorteners):
+            QMessageBox.warning(self, "Warning", "Please select a shortener API first")
+            return
+
+        cfg = self.shorteners[idx]
+
+        # Update UI
+        self.btn_quick_shorten.setEnabled(False)
+        self.btn_quick_shorten.setText("⏳ Shortening...")
+        self.quick_result_label.setText("Processing...")
+        self.quick_result_label.setStyleSheet("color: #ffd166; padding: 8px; background-color: rgba(255, 209, 102, 0.1); border-radius: 4px;")
+        QApplication.processEvents()
+
+        try:
+            from services.shortener import URLShortener
+            shortener = URLShortener()
+            base_url = cfg.get('template', '')
+
+            self._log("INFO", f"Shortening URL with {cfg.get('name')}...")
+            shortened_url = shortener.shorten_url(base_url, original_url)
+
+            if shortened_url and shortened_url != original_url:
+                # Success
+                self.quick_result_label.setText(f"✓ {shortened_url}")
+                self.quick_result_label.setStyleSheet("color: #80ed99; padding: 8px; background-color: rgba(128, 237, 153, 0.1); border-radius: 4px;")
+                self.btn_copy_short_url.setEnabled(True)
+                self._log("STEP", f"Shortened ✓ <a href='{shortened_url}' style='color:#8ecae6;'>{shortened_url}</a>")
+                self._show_toast(f"URL shortened successfully!")
+            else:
+                # Failed
+                self.quick_result_label.setText("✗ Shortening failed. API may be unavailable or incorrect.")
+                self.quick_result_label.setStyleSheet("color: #ff6b6b; padding: 8px; background-color: rgba(255, 107, 107, 0.1); border-radius: 4px;")
+                self.btn_copy_short_url.setEnabled(False)
+                self._log("ERROR", "URL shortening failed")
+
+        except Exception as e:
+            self.quick_result_label.setText(f"✗ Error: {str(e)}")
+            self.quick_result_label.setStyleSheet("color: #ff6b6b; padding: 8px; background-color: rgba(255, 107, 107, 0.1); border-radius: 4px;")
+            self.btn_copy_short_url.setEnabled(False)
+            self._log("ERROR", f"Shortening error: {str(e)}")
+
+        finally:
+            self.btn_quick_shorten.setEnabled(True)
+            self.btn_quick_shorten.setText("🔗 Shorten URL")
+
+    def _on_copy_short_url(self):
+        """Copy shortened URL to clipboard"""
+        result_text = self.quick_result_label.text()
+
+        # Extract URL from "✓ shortened_url" format
+        if result_text.startswith("✓ "):
+            url = result_text[2:].strip()
+
+            # Copy to clipboard
+            clipboard = QApplication.clipboard()
+            clipboard.setText(url)
+
+            self._show_toast("URL copied to clipboard!")
+            self._log("INFO", f"Copied to clipboard: {url}")
+        else:
+            QMessageBox.warning(self, "Warning", "No shortened URL to copy")
+
+    def _on_quick_shortener_changed(self):
+        """Handle shortener API selection change"""
+        idx = self.quick_shortener_combo.currentIndex()
+        if idx >= 0 and idx < len(self.shorteners):
+            cfg = self.shorteners[idx]
+            self._log("INFO", f"Selected shortener: {cfg.get('name')}")
 
     def _start_process(self):
         # Validate
@@ -1634,15 +1766,21 @@ class MainWindow(QMainWindow):
             self.shorteners = data.get("shorteners", []) or []
             self.shortener_combo.clear()
             self.shortener_list.clear()
+            self.quick_shortener_combo.clear()
             for s in self.shorteners:
                 name = s.get('name', '')
                 self.shortener_combo.addItem(name)
                 self.shortener_list.addItem(name)
+                self.quick_shortener_combo.addItem(name)
             sel = data.get("selected_shortener", "")
             if sel:
                 idx = self.shortener_combo.findText(sel)
                 if idx >= 0:
                     self.shortener_combo.setCurrentIndex(idx)
+                # Also set for quick shortener
+                quick_idx = self.quick_shortener_combo.findText(sel)
+                if quick_idx >= 0:
+                    self.quick_shortener_combo.setCurrentIndex(quick_idx)
             # Load blog platform configuration
             self.blog_platform = data.get("blog_platform", "blogger")
             if self.blog_platform == "wordpress":
