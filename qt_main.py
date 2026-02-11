@@ -12,14 +12,13 @@ from PyQt5.QtWidgets import (
     QTextEdit, QListWidget, QListWidgetItem, QMessageBox, QCheckBox, QProgressBar,
     QFormLayout, QDialog, QDialogButtonBox, QStyle, QComboBox, QButtonGroup
 )
-from PyQt5.QtGui import QPalette, QColor
+from PyQt5.QtGui import QPalette, QColor, QFont, QTextCharFormat, QTextBlockFormat, QTextListFormat
 
 # Project imports
 from config import validate_config
-from services.youtube import YouTubeDownloader
 from services.shortener import URLShortener
 from services.ai import ContentGenerator
-from services.blogger import BloggerPublisher, WordPressPublisher
+from services.blogger import BloggerPublisher
 from services.tiktok import TikTokService
 from utils import sanitize_filename, clean_temp_dir
 from qt_ai_settings import AISettingsDialog
@@ -161,24 +160,33 @@ class WorkerThread(QThread):
     step_done = pyqtSignal(str)
     content_generated = pyqtSignal(str, str, list)  # (title, content, images)
 
-    def __init__(self, *, video_source: str, youtube_url: str, local_path: str,
+    def __init__(self, *, local_path: str,
                  title: str, apk_links: List[Tuple[str, str]],
-                 skip_download: bool, skip_blog: bool, draft_mode: bool,
-                 blog_platform: str = "blogger", wordpress_config: dict = None,
+                 skip_blog: bool, draft_mode: bool,
                  language: str = "vietnamese", generate_images: bool = True,
                  upload_tiktok: bool = False, tiktok_account: str = "",
                  tiktok_caption: str = "", tiktok_settings: dict = None):
+        """Initialize worker thread for content distribution pipeline.
+
+        Args:
+            local_path: Path to the local video file.
+            title: Blog post title.
+            apk_links: List of (name, url) tuples for APK links.
+            skip_blog: Whether to skip blog creation step.
+            draft_mode: Whether to save blog post as draft.
+            language: Content language ('vietnamese' or 'english').
+            generate_images: Whether to generate AI images for blog.
+            upload_tiktok: Whether to upload video to TikTok.
+            tiktok_account: Name of TikTok account to upload to.
+            tiktok_caption: Caption for TikTok video.
+            tiktok_settings: Dict of TikTok upload settings.
+        """
         super().__init__()
-        self.video_source = video_source
-        self.youtube_url = youtube_url
         self.local_path = local_path
         self.title = title
         self.apk_links = apk_links
-        self.skip_download = skip_download
         self.skip_blog = skip_blog
         self.draft_mode = draft_mode
-        self.blog_platform = blog_platform
-        self.wordpress_config = wordpress_config or {}
         self.language = language
         self.generate_images = generate_images
         self.approved_content = None
@@ -191,47 +199,36 @@ class WorkerThread(QThread):
         self.tiktok_settings = tiktok_settings or {}
 
     def safe_log(self, level: str, message: str):
+        """Emit a log message with the given severity level."""
         self.log.emit(f"[{level}] {message}")
 
     def run(self):
+        """Execute the content distribution pipeline."""
         try:
             clean_temp_dir(older_than_days=1)
             total_steps = 3
             step = 0
 
-            # Step 1: Get video
+            # Step 1: Validate local video
             self.safe_log("STEP", "Prepare video source")
             video_info = None
-            if not self.skip_download:
-                step += 1
-                self.progress.emit(int(step/total_steps*100), "Preparing video...")
-                if self.video_source == "youtube":
-                    try:
-                        self.safe_log("STEP", "Download video from YouTube")
-                        self.safe_log("INFO", "Downloading YouTube video...")
-                        filename = sanitize_filename(self.title)
-                        downloader = YouTubeDownloader()
-                        video_info = downloader.download_video(self.youtube_url, f"{filename}.mp4")
-                        self.safe_log("INFO", f"Video downloaded: {video_info['file_path']}")
-                    except Exception as e:
-                        self.safe_log("ERROR", f"Error downloading video: {str(e)}")
-                        self.completed.emit(False, str(e))
-                        return
-                else:
-                    self.safe_log("STEP", "Use local video file")
-                    path = Path(self.local_path)
-                    if not path.exists():
-                        self.safe_log("ERROR", f"Local video not found: {path}")
-                        self.completed.emit(False, f"Local video not found: {path}")
-                        return
-                    video_info = {
-                        'file_path': str(path),
-                        'title': self.title,
-                        'filename': path.name,
-                        'duration': None,
-                        'size': path.stat().st_size
-                    }
-                    self.safe_log("INFO", f"Using local video: {path}")
+            step += 1
+            self.progress.emit(int(step/total_steps*100), "Preparing video...")
+
+            if self.local_path:
+                path = Path(self.local_path)
+                if not path.exists():
+                    self.safe_log("ERROR", f"Local video not found: {path}")
+                    self.completed.emit(False, f"Local video not found: {path}")
+                    return
+                video_info = {
+                    'file_path': str(path),
+                    'title': self.title,
+                    'filename': path.name,
+                    'duration': None,
+                    'size': path.stat().st_size
+                }
+                self.safe_log("INFO", f"Using local video: {path}")
             self.step_done.emit("Video ready")
 
             # Step 2: Shorten APK links
@@ -305,35 +302,19 @@ class WorkerThread(QThread):
                         self.completed.emit(False, str(e))
                         return
 
-                # Step 4: Post to blog platform
-                self.safe_log("STEP", f"Posting to {self.blog_platform.title()}")
-                self.progress.emit(int(step/total_steps*100), f"Posting to {self.blog_platform}...")
+                # Step 4: Post to Blogger
+                self.safe_log("STEP", "Posting to Blogger")
+                self.progress.emit(int(step/total_steps*100), "Posting to Blogger...")
 
                 try:
-                    # Select platform
-                    if self.blog_platform == "wordpress":
-                        self.safe_log("INFO", "Posting to WordPress...")
-                        wordpress = WordPressPublisher(
-                            site_url=self.wordpress_config.get('url'),
-                            username=self.wordpress_config.get('username'),
-                            password=self.wordpress_config.get('password')
-                        )
-                        blog_post = wordpress.create_post(
-                            title=self.title,
-                            content=blog_content,
-                            status="draft" if self.draft_mode else "publish",
-                            categories=["APK", "Download"],
-                            tags=["Mobile App", "Android"]
-                        )
-                    else:  # blogger
-                        self.safe_log("INFO", "Posting to Blogger...")
-                        blogger = BloggerPublisher()
-                        blog_post = blogger.create_post(
-                            title=self.title,
-                            content=blog_content,
-                            labels=["APK", "Download", "Mobile App"],
-                            is_draft=self.draft_mode
-                        )
+                    self.safe_log("INFO", "Posting to Blogger...")
+                    blogger = BloggerPublisher()
+                    blog_post = blogger.create_post(
+                        title=self.title,
+                        content=blog_content,
+                        labels=["APK", "Download", "Mobile App"],
+                        is_draft=self.draft_mode
+                    )
 
                     self.safe_log("INFO", f"Blog post created: {blog_post['url']}")
                 except Exception as e:
@@ -403,12 +384,6 @@ class MainWindow(QMainWindow):
         self.shorteners = []  # list of dicts: {name, template, headers_text, keys}
         self.apk_links_data = []  # list of dicts: {name, original, short}
 
-        # Blog platform configuration
-        self.blog_platform = "blogger"  # "blogger" or "wordpress"
-        self.wordpress_url = ""
-        self.wordpress_username = ""
-        self.wordpress_password = ""
-
         # TikTok service
         self.tiktok_service = TikTokService()
         self.tiktok_accounts_list = QListWidget()
@@ -424,16 +399,12 @@ class MainWindow(QMainWindow):
         self.tiktok_is_private = QCheckBox("Private Video")
         self.tiktok_worker = None
 
-        self.youtube_url_edit = QLineEdit()
+        # Content Distribution form fields
         self.title_edit = QLineEdit()
         self.local_video_edit = FileDropLineEdit()
         self.local_video_edit.setReadOnly(True)
-        self.source_youtube = QRadioButton("YouTube URL")
-        self.source_local = QRadioButton("Local Video File")
-        self.source_youtube.setChecked(True)
 
         self.apk_list = QListWidget()
-        self.skip_download_cb = QCheckBox("Skip Download")
         self.skip_blog_cb = QCheckBox("Skip Blog Creation")
         self.draft_cb = QCheckBox("Save as Draft")
         self.generate_images_cb = QCheckBox("Generate AI Images")
@@ -457,9 +428,9 @@ class MainWindow(QMainWindow):
         shortener_tab = QWidget()
         tabs.addTab(shortener_tab, "Link Shorteners")
 
-        # Add Blog Platform Configuration tab
-        blog_platform_tab = QWidget()
-        tabs.addTab(blog_platform_tab, "Blog Platform")
+        # Add Blogger Configuration tab
+        blogger_tab = QWidget()
+        tabs.addTab(blogger_tab, "Blogger")
 
         # Add AI Settings tab
         ai_settings_tab = QWidget()
@@ -471,24 +442,9 @@ class MainWindow(QMainWindow):
 
         outer = QVBoxLayout(content_tab)
 
-        # Source group
+        # Video source group (local file only)
         source_group = QGroupBox("🎬 Video Source")
         source_layout = QVBoxLayout()
-        row1 = QHBoxLayout()
-        row1.addWidget(self.source_youtube)
-        row1.addWidget(self.source_local)
-        row1.addStretch(1)
-        source_layout.addLayout(row1)
-
-        # YouTube
-        yt_row = QHBoxLayout()
-        yt_row.addWidget(QLabel("YouTube URL:"))
-        yt_row.addWidget(self.youtube_url_edit)
-        self.btn_get_info = QPushButton("Get Info")
-        yt_row.addWidget(self.btn_get_info)
-        source_layout.addLayout(yt_row)
-
-        # Local file
         local_row = QHBoxLayout()
         local_row.addWidget(QLabel("Video File:"))
         local_row.addWidget(self.local_video_edit)
@@ -613,7 +569,6 @@ class MainWindow(QMainWindow):
         # Options
         options_group = QGroupBox("⚙️ Processing Options")
         opt_row = QHBoxLayout()
-        opt_row.addWidget(self.skip_download_cb)
         opt_row.addWidget(self.skip_blog_cb)
         opt_row.addWidget(self.draft_cb)
         opt_row.addWidget(self.generate_images_cb)
@@ -651,7 +606,6 @@ class MainWindow(QMainWindow):
         wrap.setLayout(w_layout)
         self.setCentralWidget(wrap)
 
-        self._on_source_changed()
         self._apply_dark_theme()
         self._apply_icons()
 
@@ -747,8 +701,8 @@ class MainWindow(QMainWindow):
         hist_group.setLayout(h_layout)
         s_outer.addWidget(hist_group)
 
-        # Build Blog Platform Configuration tab UI
-        self._build_blog_platform_tab(blog_platform_tab)
+        # Build Blogger Configuration tab UI
+        self._build_blogger_tab(blogger_tab)
 
         # Build AI Settings tab UI
         self._build_ai_settings_tab(ai_settings_tab)
@@ -756,35 +710,16 @@ class MainWindow(QMainWindow):
         # Build TikTok Upload tab UI
         self._build_tiktok_tab(tiktok_tab)
 
-    def _build_blog_platform_tab(self, parent):
-        """Build the Blog Platform Configuration tab"""
+    def _build_blogger_tab(self, parent):
+        """Build the Blogger Configuration tab (Google Blogger only)."""
         layout = QVBoxLayout(parent)
 
         # Title
-        title_label = QLabel("<h2>📝 Blog Platform Configuration</h2>")
+        title_label = QLabel("<h2>📝 Google Blogger Configuration</h2>")
         layout.addWidget(title_label)
 
-        # Platform selection group
-        platform_group = QGroupBox("Select Blog Platform")
-        platform_layout = QVBoxLayout()
-
-        self.platform_button_group = QButtonGroup()
-        self.blogger_radio = QRadioButton("Google Blogger")
-        self.wordpress_radio = QRadioButton("WordPress")
-
-        self.platform_button_group.addButton(self.blogger_radio)
-        self.platform_button_group.addButton(self.wordpress_radio)
-
-        self.blogger_radio.setChecked(True)
-        self.blogger_radio.toggled.connect(self._on_platform_changed)
-
-        platform_layout.addWidget(self.blogger_radio)
-        platform_layout.addWidget(self.wordpress_radio)
-        platform_group.setLayout(platform_layout)
-        layout.addWidget(platform_group)
-
         # Blogger configuration
-        self.blogger_config_group = QGroupBox("Google Blogger Settings")
+        blogger_config_group = QGroupBox("Google Blogger Settings")
         blogger_layout = QVBoxLayout()
 
         blogger_info = QLabel(
@@ -803,53 +738,160 @@ class MainWindow(QMainWindow):
         open_env_btn.clicked.connect(self._open_env_file)
         blogger_layout.addWidget(open_env_btn)
 
-        self.blogger_config_group.setLayout(blogger_layout)
-        layout.addWidget(self.blogger_config_group)
+        blogger_config_group.setLayout(blogger_layout)
+        layout.addWidget(blogger_config_group)
 
-        # WordPress configuration
-        self.wordpress_config_group = QGroupBox("WordPress Settings")
-        wordpress_layout = QFormLayout()
+        # Quick Blog Post section
+        quick_post_group = QGroupBox("✍️ Quick Blog Post")
+        quick_post_layout = QVBoxLayout()
 
-        # WordPress URL
-        self.wordpress_url_edit = QLineEdit()
-        self.wordpress_url_edit.setPlaceholderText("https://yoursite.com")
-        wordpress_layout.addRow("WordPress URL:", self.wordpress_url_edit)
+        # Draft/Publish toggle
+        draft_row = QHBoxLayout()
+        self.quick_post_draft = QCheckBox("Save as Draft")
+        self.quick_post_draft.setChecked(False)
+        draft_row.addWidget(self.quick_post_draft)
+        draft_row.addStretch()
+        quick_post_layout.addLayout(draft_row)
 
-        # WordPress Username
-        self.wordpress_username_edit = QLineEdit()
-        self.wordpress_username_edit.setPlaceholderText("your-username")
-        wordpress_layout.addRow("Username:", self.wordpress_username_edit)
+        # Title input
+        title_row = QHBoxLayout()
+        title_row.addWidget(QLabel("Title:"))
+        self.quick_post_title = QLineEdit()
+        self.quick_post_title.setPlaceholderText("Enter your blog post title...")
+        title_row.addWidget(self.quick_post_title, 1)
+        quick_post_layout.addLayout(title_row)
 
-        # WordPress Password/App Password
-        password_layout = QHBoxLayout()
-        self.wordpress_password_edit = QLineEdit()
-        self.wordpress_password_edit.setPlaceholderText("Application Password")
-        self.wordpress_password_edit.setEchoMode(QLineEdit.Password)
-        password_layout.addWidget(self.wordpress_password_edit)
+        # Character count
+        self.quick_post_title_count = QLabel("0 characters")
+        self.quick_post_title_count.setStyleSheet("color: #aaa; font-style: italic; font-size: 10px;")
+        quick_post_layout.addWidget(self.quick_post_title_count)
 
-        show_pass_btn = QPushButton("Show")
-        show_pass_btn.setCheckable(True)
-        show_pass_btn.toggled.connect(
-            lambda checked: self.wordpress_password_edit.setEchoMode(
-                QLineEdit.Normal if checked else QLineEdit.Password
-            )
-        )
-        password_layout.addWidget(show_pass_btn)
-        wordpress_layout.addRow("App Password:", password_layout)
+        # Content input (Rich Text Editor with HTML source toggle)
+        editor_header = QHBoxLayout()
+        editor_header.addWidget(QLabel("Content:"))
+        self.editor_mode_toggle = QPushButton("📝 Rich Text")
+        self.editor_mode_toggle.setCheckable(True)
+        self.editor_mode_toggle.setChecked(True)
+        self.editor_mode_toggle.setMaximumWidth(150)
+        self.editor_mode_toggle.setStyleSheet("padding: 5px;")
+        editor_header.addWidget(self.editor_mode_toggle)
+        editor_header.addStretch()
+        quick_post_layout.addLayout(editor_header)
 
-        # Test connection button
-        test_btn = QPushButton("Test WordPress Connection")
-        test_btn.clicked.connect(self._test_wordpress_connection)
-        wordpress_layout.addRow("", test_btn)
+        # Rich text toolbar
+        self.editor_toolbar = QWidget()
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Save button
-        save_btn = QPushButton("Save WordPress Settings")
-        save_btn.clicked.connect(self._save_wordpress_config)
-        wordpress_layout.addRow("", save_btn)
+        # Text formatting
+        self.btn_bold = QPushButton("B")
+        self.btn_bold.setMaximumWidth(30)
+        self.btn_bold.setStyleSheet("font-weight: bold;")
+        self.btn_bold.setToolTip("Bold")
 
-        self.wordpress_config_group.setLayout(wordpress_layout)
-        self.wordpress_config_group.setVisible(False)  # Hide by default
-        layout.addWidget(self.wordpress_config_group)
+        self.btn_italic = QPushButton("I")
+        self.btn_italic.setMaximumWidth(30)
+        self.btn_italic.setStyleSheet("font-style: italic;")
+        self.btn_italic.setToolTip("Italic")
+
+        self.btn_underline = QPushButton("U")
+        self.btn_underline.setMaximumWidth(30)
+        self.btn_underline.setStyleSheet("text-decoration: underline;")
+        self.btn_underline.setToolTip("Underline")
+
+        toolbar_layout.addWidget(self.btn_bold)
+        toolbar_layout.addWidget(self.btn_italic)
+        toolbar_layout.addWidget(self.btn_underline)
+
+        # Separator
+        separator1 = QLabel("|")
+        toolbar_layout.addWidget(separator1)
+
+        # Headings
+        self.heading_combo = QComboBox()
+        self.heading_combo.addItem("Paragraph", "p")
+        self.heading_combo.addItem("Heading 1", "h1")
+        self.heading_combo.addItem("Heading 2", "h2")
+        self.heading_combo.addItem("Heading 3", "h3")
+        self.heading_combo.setMaximumWidth(120)
+        toolbar_layout.addWidget(self.heading_combo)
+
+        # Separator
+        separator2 = QLabel("|")
+        toolbar_layout.addWidget(separator2)
+
+        # Lists
+        self.btn_bullet_list = QPushButton("• List")
+        self.btn_bullet_list.setMaximumWidth(60)
+        self.btn_bullet_list.setToolTip("Bullet List")
+
+        self.btn_number_list = QPushButton("1. List")
+        self.btn_number_list.setMaximumWidth(60)
+        self.btn_number_list.setToolTip("Numbered List")
+
+        toolbar_layout.addWidget(self.btn_bullet_list)
+        toolbar_layout.addWidget(self.btn_number_list)
+
+        # Separator
+        separator3 = QLabel("|")
+        toolbar_layout.addWidget(separator3)
+
+        # Link and Image
+        self.btn_link = QPushButton("🔗 Link")
+        self.btn_link.setMaximumWidth(70)
+        self.btn_link.setToolTip("Insert Link")
+
+        self.btn_image = QPushButton("🖼️ Image")
+        self.btn_image.setMaximumWidth(80)
+        self.btn_image.setToolTip("Insert Image")
+
+        toolbar_layout.addWidget(self.btn_link)
+        toolbar_layout.addWidget(self.btn_image)
+
+        toolbar_layout.addStretch()
+        self.editor_toolbar.setLayout(toolbar_layout)
+        quick_post_layout.addWidget(self.editor_toolbar)
+
+        # Content editor (supports both rich text and HTML source)
+        self.quick_post_content = QTextEdit()
+        self.quick_post_content.setAcceptRichText(True)
+        self.quick_post_content.setMinimumHeight(250)
+        quick_post_layout.addWidget(self.quick_post_content)
+
+        # Word/Character count
+        self.quick_post_content_count = QLabel("0 characters, 0 words")
+        self.quick_post_content_count.setStyleSheet("color: #aaa; font-style: italic; font-size: 10px;")
+        quick_post_layout.addWidget(self.quick_post_content_count)
+
+        # Categories/Tags (optional)
+        tags_row = QHBoxLayout()
+        tags_row.addWidget(QLabel("Tags/Labels:"))
+        self.quick_post_tags = QLineEdit()
+        self.quick_post_tags.setPlaceholderText("Separate with commas (e.g., Technology, Tutorial, Guide)")
+        tags_row.addWidget(self.quick_post_tags, 1)
+        quick_post_layout.addLayout(tags_row)
+
+        # Post button and result
+        post_row = QHBoxLayout()
+        self.btn_quick_post = QPushButton("📤 Publish Post")
+        self.btn_quick_post.setStyleSheet("background-color: #80ed99; color: black; font-weight: bold; padding: 10px 20px; font-size: 14px;")
+        post_row.addWidget(self.btn_quick_post)
+
+        self.btn_clear_quick_post = QPushButton("🗑️ Clear")
+        post_row.addWidget(self.btn_clear_quick_post)
+
+        post_row.addStretch()
+        quick_post_layout.addLayout(post_row)
+
+        # Result display
+        self.quick_post_result = QLabel("Post result will appear here")
+        self.quick_post_result.setStyleSheet("color: #8ecae6; padding: 10px; background-color: rgba(142, 202, 230, 0.1); border-radius: 4px; margin-top: 10px;")
+        self.quick_post_result.setWordWrap(True)
+        self.quick_post_result.setOpenExternalLinks(True)
+        quick_post_layout.addWidget(self.quick_post_result)
+
+        quick_post_group.setLayout(quick_post_layout)
+        layout.addWidget(quick_post_group)
 
         # Info section
         info_group = QGroupBox("ℹ️ Information")
@@ -859,12 +901,9 @@ class MainWindow(QMainWindow):
             "<b>Google Blogger:</b><br>"
             "• Free blogging platform by Google<br>"
             "• Requires OAuth2 authentication<br>"
-            "• Configure via .env file<br><br>"
-            "<b>WordPress:</b><br>"
-            "• Self-hosted or WordPress.com<br>"
-            "• Requires WordPress REST API enabled<br>"
-            "• Use Application Passwords for authentication<br>"
-            "• Create Application Password: Settings → Users → Application Passwords"
+            "• Configure via .env file<br>"
+            "• Blog posts can be published or saved as drafts<br>"
+            "• Supports labels/tags for categorization"
         )
         info_text.setWordWrap(True)
         info_layout.addWidget(info_text)
@@ -874,71 +913,14 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-    def _on_platform_changed(self):
-        """Handle blog platform selection change"""
-        if self.blogger_radio.isChecked():
-            self.blog_platform = "blogger"
-            self.blogger_config_group.setVisible(True)
-            self.wordpress_config_group.setVisible(False)
-        else:
-            self.blog_platform = "wordpress"
-            self.blogger_config_group.setVisible(False)
-            self.wordpress_config_group.setVisible(True)
-
-        self._save_session()
-        self._log("INFO", f"Blog platform changed to: {self.blog_platform}")
-
     def _open_env_file(self):
-        """Open .env file in default editor"""
+        """Open .env file in default editor."""
         env_path = Path(".env")
         if env_path.exists():
             import os
             os.startfile(str(env_path))
         else:
             QMessageBox.warning(self, "Warning", ".env file not found")
-
-    def _test_wordpress_connection(self):
-        """Test WordPress connection"""
-        url = self.wordpress_url_edit.text().strip()
-        username = self.wordpress_username_edit.text().strip()
-        password = self.wordpress_password_edit.text().strip()
-
-        if not all([url, username, password]):
-            QMessageBox.warning(self, "Warning",
-                "Please fill in all WordPress credentials")
-            return
-
-        try:
-            self._log("INFO", "Testing WordPress connection...")
-            wordpress = WordPressPublisher(url, username, password)
-            success, message = wordpress.test_connection()
-
-            if success:
-                QMessageBox.information(self, "Success", message)
-                self._log("INFO", f"WordPress connection: {message}")
-            else:
-                QMessageBox.warning(self, "Connection Failed", message)
-                self._log("ERROR", f"WordPress connection failed: {message}")
-
-        except Exception as e:
-            error_msg = f"Error testing connection: {str(e)}"
-            QMessageBox.critical(self, "Error", error_msg)
-            self._log("ERROR", error_msg)
-
-    def _save_wordpress_config(self):
-        """Save WordPress configuration"""
-        self.wordpress_url = self.wordpress_url_edit.text().strip()
-        self.wordpress_username = self.wordpress_username_edit.text().strip()
-        self.wordpress_password = self.wordpress_password_edit.text().strip()
-
-        if all([self.wordpress_url, self.wordpress_username, self.wordpress_password]):
-            self._save_session()
-            QMessageBox.information(self, "Success",
-                "WordPress settings saved successfully!")
-            self._log("INFO", "WordPress settings saved")
-        else:
-            QMessageBox.warning(self, "Warning",
-                "Please fill in all WordPress credentials")
 
     def _build_ai_settings_tab(self, parent):
         """Build the AI Settings tab with button to open settings dialog"""
@@ -1175,22 +1157,18 @@ class MainWindow(QMainWindow):
         # Load accounts
         self._refresh_tiktok_accounts()
 
+
     def _wire_events(self):
-        self.source_youtube.toggled.connect(self._on_source_changed)
-        self.source_youtube.toggled.connect(self._save_session)
-        self.source_local.toggled.connect(self._save_session)
+        """Connect all UI signals to their handler slots."""
         self.btn_browse.clicked.connect(self._browse_video)
-        self.btn_get_info.clicked.connect(self._get_video_info)
         self.btn_add_apk.clicked.connect(self._add_apk_link)
         self.btn_remove_apk.clicked.connect(self._remove_selected_apk)
         self.btn_clear_apk.clicked.connect(self.apk_list.clear)
         self.btn_start.clicked.connect(self._start_process)
         self.btn_stop.clicked.connect(self._stop_process)
         self.btn_clear_log.clicked.connect(self.log_text.clear)
-        self.youtube_url_edit.textChanged.connect(self._save_session)
         self.local_video_edit.textChanged.connect(self._save_session)
         self.title_edit.textChanged.connect(self._save_session)
-        self.skip_download_cb.stateChanged.connect(self._save_session)
         self.skip_blog_cb.stateChanged.connect(self._save_session)
         self.draft_cb.stateChanged.connect(self._save_session)
         self.generate_images_cb.stateChanged.connect(self._save_session)
@@ -1210,6 +1188,24 @@ class MainWindow(QMainWindow):
         self.btn_copy_short_url.clicked.connect(self._on_copy_short_url)
         self.quick_shortener_combo.currentIndexChanged.connect(self._on_quick_shortener_changed)
 
+        # Quick blog post events
+        self.btn_quick_post.clicked.connect(self._on_quick_blog_post)
+        self.btn_clear_quick_post.clicked.connect(self._on_clear_quick_post)
+        self.quick_post_title.textChanged.connect(self._on_quick_post_title_changed)
+        self.quick_post_content.textChanged.connect(self._on_quick_post_content_changed)
+        self.quick_post_draft.stateChanged.connect(self._on_quick_post_draft_changed)
+
+        # Rich text editor events
+        self.editor_mode_toggle.clicked.connect(self._on_editor_mode_toggle)
+        self.btn_bold.clicked.connect(self._on_format_bold)
+        self.btn_italic.clicked.connect(self._on_format_italic)
+        self.btn_underline.clicked.connect(self._on_format_underline)
+        self.heading_combo.currentIndexChanged.connect(self._on_heading_changed)
+        self.btn_bullet_list.clicked.connect(self._on_bullet_list)
+        self.btn_number_list.clicked.connect(self._on_number_list)
+        self.btn_link.clicked.connect(self._on_insert_link)
+        self.btn_image.clicked.connect(self._on_insert_image)
+
         # Main tab TikTok events
         self.enable_tiktok_cb.stateChanged.connect(self._on_enable_tiktok_changed)
         self.btn_refresh_tiktok.clicked.connect(self._refresh_main_tiktok_accounts)
@@ -1228,6 +1224,7 @@ class MainWindow(QMainWindow):
             self.tiktok_title_edit.textChanged.connect(self._on_tiktok_caption_changed)
 
     def _validate_config(self):
+        """Validate the application configuration."""
         try:
             validate_config()
             self._log("INFO", "Configuration validated successfully")
@@ -1235,39 +1232,14 @@ class MainWindow(QMainWindow):
             self._log("ERROR", f"Configuration error: {str(e)}")
             QMessageBox.critical(self, "Configuration Error", f"{str(e)}\n\nPlease check your .env file.")
 
-    def _on_source_changed(self):
-        is_yt = self.source_youtube.isChecked()
-        self.youtube_url_edit.setEnabled(is_yt)
-        self.btn_get_info.setEnabled(is_yt)
-        self.local_video_edit.setEnabled(not is_yt)
-        self.btn_browse.setEnabled(not is_yt)
-
     def _browse_video(self):
+        """Open file dialog to select a local video file."""
         path, _ = QFileDialog.getOpenFileName(self, "Select Video File", "", "Video Files (*.mp4 *.avi *.mov *.mkv *.wmv *.flv *.webm)")
         if path:
             self.local_video_edit.setText(path)
             if not self.title_edit.text().strip():
                 name = Path(path).stem.replace("_", " ").replace("-", " ")
                 self.title_edit.setText(name.title())
-
-    def _get_video_info(self):
-        url = self.youtube_url_edit.text().strip()
-        if not url:
-            QMessageBox.warning(self, "Warning", "Please enter a YouTube URL first")
-            return
-        try:
-            self.status_label.setText("Fetching video info...")
-            downloader = YouTubeDownloader()
-            info = downloader.get_video_info(url)
-            suggested_title = info.get('title', '')
-            if suggested_title:
-                self.title_edit.setText(suggested_title)
-                self._log("INFO", f"Auto-filled blog title: {suggested_title}")
-            self._log("INFO", f"Video found: {info.get('title', 'Unknown')}")
-            self.status_label.setText("Video info fetched successfully")
-        except Exception as e:
-            self._log("ERROR", f"Error fetching video info: {str(e)}")
-            self.status_label.setText("Error fetching video info")
 
     def _add_apk_link(self):
         dlg = APKLinkDialog(self)
@@ -1456,21 +1428,291 @@ class MainWindow(QMainWindow):
             cfg = self.shorteners[idx]
             self._log("INFO", f"Selected shortener: {cfg.get('name')}")
 
-    def _start_process(self):
-        # Validate
-        is_yt = self.source_youtube.isChecked()
-        if is_yt:
-            if not self.youtube_url_edit.text().strip():
-                QMessageBox.critical(self, "Error", "Please enter a YouTube URL")
-                return
+    def _on_quick_post_title_changed(self):
+        """Update title character count"""
+        title = self.quick_post_title.text()
+        char_count = len(title)
+        self.quick_post_title_count.setText(f"{char_count} characters")
+
+    def _on_quick_post_content_changed(self):
+        """Update content character and word count"""
+        content = self.quick_post_content.toPlainText()
+        char_count = len(content)
+        word_count = len(content.split())
+        self.quick_post_content_count.setText(f"{char_count} characters, {word_count} words")
+
+    def _on_quick_post_draft_changed(self):
+        """Update button text based on draft status"""
+        if self.quick_post_draft.isChecked():
+            self.btn_quick_post.setText("💾 Save as Draft")
         else:
-            p = self.local_video_edit.text().strip()
-            if not p:
-                QMessageBox.critical(self, "Error", "Please select a video file")
-                return
-            if not Path(p).exists():
+            self.btn_quick_post.setText("📤 Publish Post")
+
+
+
+    def _on_editor_mode_toggle(self):
+        """Toggle between rich text and HTML source view"""
+        if self.editor_mode_toggle.isChecked():
+            # Switch to Rich Text mode
+            html_source = self.quick_post_content.toPlainText()
+            self.quick_post_content.setHtml(html_source)
+            self.editor_mode_toggle.setText("📝 Rich Text")
+            self.editor_toolbar.setEnabled(True)
+        else:
+            # Switch to HTML Source mode
+            html_content = self.quick_post_content.toHtml()
+            self.quick_post_content.setPlainText(html_content)
+            self.editor_mode_toggle.setText("</> HTML Source")
+            self.editor_toolbar.setEnabled(False)
+
+    def _on_format_bold(self):
+        """Apply bold formatting"""
+        fmt = self.quick_post_content.currentCharFormat()
+        fmt.setFontWeight(QFont.Bold if fmt.fontWeight() != QFont.Bold else QFont.Normal)
+        self.quick_post_content.setCurrentCharFormat(fmt)
+        self.quick_post_content.setFocus()
+
+    def _on_format_italic(self):
+        """Apply italic formatting"""
+        fmt = self.quick_post_content.currentCharFormat()
+        fmt.setFontItalic(not fmt.fontItalic())
+        self.quick_post_content.setCurrentCharFormat(fmt)
+        self.quick_post_content.setFocus()
+
+    def _on_format_underline(self):
+        """Apply underline formatting"""
+        fmt = self.quick_post_content.currentCharFormat()
+        fmt.setFontUnderline(not fmt.fontUnderline())
+        self.quick_post_content.setCurrentCharFormat(fmt)
+        self.quick_post_content.setFocus()
+
+    def _on_heading_changed(self, index):
+        """Apply heading format"""
+        if index < 0:
+            return
+
+        tag = self.heading_combo.currentData()
+        cursor = self.quick_post_content.textCursor()
+
+        if tag == "p":
+            # Normal paragraph
+            fmt = QTextBlockFormat()
+            fmt.setHeadingLevel(0)
+            cursor.setBlockFormat(fmt)
+            char_fmt = QTextCharFormat()
+            char_fmt.setFontPointSize(12)
+            char_fmt.setFontWeight(QFont.Normal)
+            cursor.setCharFormat(char_fmt)
+        elif tag == "h1":
+            fmt = QTextBlockFormat()
+            fmt.setHeadingLevel(1)
+            cursor.setBlockFormat(fmt)
+            char_fmt = QTextCharFormat()
+            char_fmt.setFontPointSize(24)
+            char_fmt.setFontWeight(QFont.Bold)
+            cursor.setCharFormat(char_fmt)
+        elif tag == "h2":
+            fmt = QTextBlockFormat()
+            fmt.setHeadingLevel(2)
+            cursor.setBlockFormat(fmt)
+            char_fmt = QTextCharFormat()
+            char_fmt.setFontPointSize(20)
+            char_fmt.setFontWeight(QFont.Bold)
+            cursor.setCharFormat(char_fmt)
+        elif tag == "h3":
+            fmt = QTextBlockFormat()
+            fmt.setHeadingLevel(3)
+            cursor.setBlockFormat(fmt)
+            char_fmt = QTextCharFormat()
+            char_fmt.setFontPointSize(16)
+            char_fmt.setFontWeight(QFont.Bold)
+            cursor.setCharFormat(char_fmt)
+
+        self.quick_post_content.setTextCursor(cursor)
+        self.quick_post_content.setFocus()
+
+    def _on_bullet_list(self):
+        """Insert bullet list"""
+        cursor = self.quick_post_content.textCursor()
+        cursor.insertList(QTextListFormat.ListDisc)
+        self.quick_post_content.setFocus()
+
+    def _on_number_list(self):
+        """Insert numbered list"""
+        cursor = self.quick_post_content.textCursor()
+        cursor.insertList(QTextListFormat.ListDecimal)
+        self.quick_post_content.setFocus()
+
+    def _on_insert_link(self):
+        """Insert hyperlink"""
+        cursor = self.quick_post_content.textCursor()
+        selected_text = cursor.selectedText()
+
+        # Ask for URL
+        from PyQt5.QtWidgets import QInputDialog
+        url, ok = QInputDialog.getText(
+            self, "Insert Link",
+            "Enter URL:",
+            QLineEdit.Normal,
+            "https://"
+        )
+
+        if ok and url:
+            if not selected_text:
+                # Ask for link text
+                text, ok2 = QInputDialog.getText(
+                    self, "Insert Link",
+                    "Enter link text:",
+                    QLineEdit.Normal,
+                    url
+                )
+                if ok2 and text:
+                    selected_text = text
+                else:
+                    return
+
+            # Insert link
+            fmt = QTextCharFormat()
+            fmt.setAnchor(True)
+            fmt.setAnchorHref(url)
+            fmt.setForeground(QColor("blue"))
+            fmt.setFontUnderline(True)
+
+            cursor.insertText(selected_text, fmt)
+            self.quick_post_content.setFocus()
+
+    def _on_insert_image(self):
+        """Insert image"""
+        from PyQt5.QtWidgets import QInputDialog
+
+        # Ask for image URL
+        url, ok = QInputDialog.getText(
+            self, "Insert Image",
+            "Enter image URL:",
+            QLineEdit.Normal,
+            "https://"
+        )
+
+        if ok and url:
+            # Ask for alt text
+            alt_text, ok2 = QInputDialog.getText(
+                self, "Insert Image",
+                "Enter image description (alt text):",
+                QLineEdit.Normal,
+                "Image"
+            )
+
+            if ok2:
+                cursor = self.quick_post_content.textCursor()
+                # Insert as HTML
+                html = f'<img src="{url}" alt="{alt_text}" style="max-width: 100%;">'
+                cursor.insertHtml(html)
+                self.quick_post_content.setFocus()
+
+    def _on_clear_quick_post(self):
+        """Clear all quick post fields"""
+        self.quick_post_title.clear()
+        self.quick_post_content.clear()
+        self.quick_post_tags.clear()
+        self.quick_post_result.setText("Post result will appear here")
+        self.quick_post_result.setStyleSheet("color: #8ecae6; padding: 10px; background-color: rgba(142, 202, 230, 0.1); border-radius: 4px; margin-top: 10px;")
+        self._show_toast("Form cleared")
+
+    def _on_quick_blog_post(self):
+        """Handle quick blog post creation (Blogger only)."""
+        title = self.quick_post_title.text().strip()
+
+        # Get content based on editor mode
+        if self.editor_mode_toggle.isChecked():
+            # Rich text mode - get HTML
+            content = self.quick_post_content.toHtml().strip()
+        else:
+            # HTML source mode - get plain text as HTML
+            content = self.quick_post_content.toPlainText().strip()
+
+        is_draft = self.quick_post_draft.isChecked()
+        tags_text = self.quick_post_tags.text().strip()
+
+        # Validation
+        if not title:
+            QMessageBox.warning(self, "Warning", "Please enter a blog post title")
+            self.quick_post_title.setFocus()
+            return
+
+        if not content:
+            QMessageBox.warning(self, "Warning", "Please enter blog post content")
+            self.quick_post_content.setFocus()
+            return
+
+        # Parse tags/labels
+        tags = [tag.strip() for tag in tags_text.split(',') if tag.strip()] if tags_text else []
+
+        # Confirm action
+        action = "save as draft" if is_draft else "publish"
+
+        reply = QMessageBox.question(
+            self, "Confirm Post",
+            f"Are you sure you want to {action} this post to Blogger?\n\n"
+            f"Title: {title[:50]}{'...' if len(title) > 50 else ''}\n"
+            f"Content length: {len(content)} characters\n"
+            f"Tags: {', '.join(tags) if tags else 'None'}",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # Update UI
+        self.btn_quick_post.setEnabled(False)
+        self.btn_quick_post.setText("⏳ Posting...")
+        self.quick_post_result.setText("Creating blog post...")
+        self.quick_post_result.setStyleSheet("color: #ffd166; padding: 10px; background-color: rgba(255, 209, 102, 0.1); border-radius: 4px; margin-top: 10px;")
+        QApplication.processEvents()
+
+        try:
+            self._log("STEP", f"Creating Blogger post: {title}")
+
+            from services.blogger import BloggerPublisher
+            blogger = BloggerPublisher()
+            result = blogger.create_post(
+                title=title,
+                content=content,
+                labels=tags,
+                is_draft=is_draft
+            )
+
+            # Success
+            status = "Draft saved" if is_draft else "Published"
+            self.quick_post_result.setText(
+                f"✓ {status} successfully!\n"
+                f"<a href='{result['url']}' style='color:#80ed99;'>{result['url']}</a>"
+            )
+            self.quick_post_result.setStyleSheet("color: #80ed99; padding: 10px; background-color: rgba(128, 237, 153, 0.1); border-radius: 4px; margin-top: 10px;")
+            self._log("STEP", f"Blogger post created ✓ <a href='{result['url']}' style='color:#8ecae6;'>{result['url']}</a>")
+            self._show_toast(f"Blogger post {action}ed successfully!")
+
+        except Exception as e:
+            # Error
+            error_msg = str(e)
+            self.quick_post_result.setText(f"✗ Error: {error_msg}")
+            self.quick_post_result.setStyleSheet("color: #ff6b6b; padding: 10px; background-color: rgba(255, 107, 107, 0.1); border-radius: 4px; margin-top: 10px;")
+            self._log("ERROR", f"Failed to create blog post: {error_msg}")
+            QMessageBox.critical(self, "Error", f"Failed to create blog post:\n\n{error_msg}")
+
+        finally:
+            # Reset button
+            self.btn_quick_post.setEnabled(True)
+            self._on_quick_post_draft_changed()  # Reset button text
+
+    def _start_process(self):
+        """Start the content distribution pipeline."""
+        # Validate local video
+        video_path = self.local_video_edit.text().strip()
+        if video_path:
+            if not Path(video_path).exists():
                 QMessageBox.critical(self, "Error", "Selected video file does not exist")
                 return
+
         if not self.title_edit.text().strip():
             QMessageBox.critical(self, "Error", "Please enter a blog title")
             return
@@ -1514,20 +1756,11 @@ class MainWindow(QMainWindow):
             }
 
         self.worker = WorkerThread(
-            video_source="youtube" if is_yt else "local",
-            youtube_url=self.youtube_url_edit.text().strip(),
-            local_path=self.local_video_edit.text().strip(),
+            local_path=video_path,
             title=self.title_edit.text().strip(),
             apk_links=self._collect_apk_links(),
-            skip_download=self.skip_download_cb.isChecked(),
             skip_blog=self.skip_blog_cb.isChecked(),
             draft_mode=self.draft_cb.isChecked(),
-            blog_platform=self.blog_platform,
-            wordpress_config={
-                'url': self.wordpress_url,
-                'username': self.wordpress_username,
-                'password': self.wordpress_password
-            },
             language=selected_language,
             generate_images=self.generate_images_cb.isChecked(),
             upload_tiktok=upload_tiktok,
@@ -1714,22 +1947,16 @@ class MainWindow(QMainWindow):
         self._save_session()
 
     def _save_session(self):
+        """Save current session state to disk for restoration."""
         try:
             data = {
-                "source": "youtube" if self.source_youtube.isChecked() else "local",
-                "youtube_url": self.youtube_url_edit.text().strip(),
                 "local_path": self.local_video_edit.text().strip(),
                 "title": self.title_edit.text().strip(),
                 "apk_links": [(d.get("name"), d.get("original")) for d in self.apk_links_data] if self.apk_links_data else self._collect_apk_links(),
-                "skip_download": self.skip_download_cb.isChecked(),
                 "skip_blog": self.skip_blog_cb.isChecked(),
                 "draft": self.draft_cb.isChecked(),
                 "shorteners": self.shorteners,
                 "selected_shortener": self.shortener_combo.currentText() if self.shortener_combo.currentIndex() >= 0 else "",
-                "blog_platform": self.blog_platform,
-                "wordpress_url": self.wordpress_url,
-                "wordpress_username": self.wordpress_username,
-                "wordpress_password": self.wordpress_password,
                 "language": self.language_combo.currentData() if self.language_combo.currentIndex() >= 0 else "vietnamese",
                 "generate_images": self.generate_images_cb.isChecked(),
                 "enable_tiktok": self.enable_tiktok_cb.isChecked(),
@@ -1741,15 +1968,11 @@ class MainWindow(QMainWindow):
             pass
 
     def _load_session(self):
+        """Restore session state from disk."""
         try:
             if not self.session_path.exists():
                 return
             data = __import__("json").loads(self.session_path.read_text(encoding="utf-8"))
-            if data.get("source") == "youtube":
-                self.source_youtube.setChecked(True)
-            else:
-                self.source_local.setChecked(True)
-            self.youtube_url_edit.setText(data.get("youtube_url", ""))
             self.local_video_edit.setText(data.get("local_path", ""))
             self.title_edit.setText(data.get("title", ""))
             self.apk_list.clear()
@@ -1758,7 +1981,6 @@ class MainWindow(QMainWindow):
                 item = QListWidgetItem(f"{name}: {url}")
                 self.apk_list.addItem(item)
                 self.apk_links_data.append({"name": name, "original": url, "short": url})
-            self.skip_download_cb.setChecked(bool(data.get("skip_download", False)))
             self.skip_blog_cb.setChecked(bool(data.get("skip_blog", False)))
             self.draft_cb.setChecked(bool(data.get("draft", False)))
             self.generate_images_cb.setChecked(bool(data.get("generate_images", True)))
@@ -1781,19 +2003,6 @@ class MainWindow(QMainWindow):
                 quick_idx = self.quick_shortener_combo.findText(sel)
                 if quick_idx >= 0:
                     self.quick_shortener_combo.setCurrentIndex(quick_idx)
-            # Load blog platform configuration
-            self.blog_platform = data.get("blog_platform", "blogger")
-            if self.blog_platform == "wordpress":
-                self.wordpress_radio.setChecked(True)
-            else:
-                self.blogger_radio.setChecked(True)
-            self.wordpress_url = data.get("wordpress_url", "")
-            self.wordpress_username = data.get("wordpress_username", "")
-            self.wordpress_password = data.get("wordpress_password", "")
-            # Update WordPress form fields
-            self.wordpress_url_edit.setText(self.wordpress_url)
-            self.wordpress_username_edit.setText(self.wordpress_username)
-            self.wordpress_password_edit.setText(self.wordpress_password)
 
             # Load language preference
             saved_language = data.get("language", "vietnamese")
@@ -2187,6 +2396,7 @@ class MainWindow(QMainWindow):
             self._log("ERROR", f"✗ TikTok upload failed: {message}")
             self.status_label.setText("Upload failed")
             QMessageBox.critical(self, "Upload Failed", message)
+
 
     def closeEvent(self, event):
         self._save_session()

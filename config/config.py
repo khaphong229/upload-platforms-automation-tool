@@ -30,6 +30,9 @@ TIKTOK_USERNAME = os.getenv('TIKTOK_USERNAME')
 TIKTOK_PASSWORD = os.getenv('TIKTOK_PASSWORD')
 TIKTOK_SESSION_ID = os.getenv('TIKTOK_SESSION_ID')
 
+# YouTube
+YOUTUBE_CREDENTIALS_PATH = os.getenv('YOUTUBE_CREDENTIALS_PATH', 'youtube_credentials.json')
+
 # Logging
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 logging.basicConfig(
